@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "QQ group guard",
+    "description": "QQ group management: toxic-word defense, join approval, welcome messages, join quiz, observation period, and announcements. AI assistance is off by default and only calls a model when enabled."
+  }
+}

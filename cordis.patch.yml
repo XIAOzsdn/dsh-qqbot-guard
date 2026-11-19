@@ -1,0 +1,6 @@
+# dsh-qqbot-guard：QQ 群管理插件
+# 安装后自动出现「QQ 群管家」设置页。
+- insert:
+    - id: qqbot-guard
+      name: dsh-qqbot-guard
+      config: {}
