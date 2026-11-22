@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkCompat, probeNetwork, SUPPORT_MATRIX } from '../lib/compat.js';
+import { DEFAULT_SETTINGS } from '../lib/defaults.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'qqg-doctor-'));
@@ -51,6 +52,11 @@ const native = findNativeModules(join(root, 'node_modules'), 4);
 console.log(native.length
   ? `[注意] 依赖里发现原生文件：${native.slice(0, 5).join(', ')}`
   : '[通过] 插件依赖零原生模块（无需 Python / VS Build Tools / VC++ 编译环境）');
+
+printHeader('独立局域网面板');
+console.log(`默认监听：${DEFAULT_SETTINGS.panel.host}:${DEFAULT_SETTINGS.panel.port}`);
+console.log('浏览器访问 http://本机局域网IP:' + DEFAULT_SETTINGS.panel.port + '/，需要密码登录。');
+console.log('若手机/其他电脑打不开，请在系统防火墙放行该端口（仅限可信局域网）。');
 
 printHeader('QQ 接口连通性');
 const net = await probeNetwork();

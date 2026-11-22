@@ -141,6 +141,24 @@ await check('前端模块 ID 一致', () => {
   return '通过';
 });
 
+await check('独立面板与密码', () => {
+  for (const rel of ['webpanel/index.html', 'webpanel/app.js', 'webpanel/style.css']) {
+    if (!existsSync(join(root, rel))) throw new Error(`缺少面板文件 ${rel}`);
+  }
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  if (!pkg.files.includes('webpanel')) throw new Error('package.json files 未包含 webpanel');
+  const auth = readFileSync(join(root, 'lib', 'auth.js'), 'utf8');
+  if (!auth.includes('checkPasswordPolicy')) throw new Error('缺少密码策略校验');
+  if (!auth.includes('setup({')) throw new Error('缺少首次初始化流程');
+  if (auth.includes('DEFAULT_HASHES')) throw new Error('仍内置默认密码');
+  if (auth.includes('xujianan1029') || /['"]Linux['"]/u.test(auth)) throw new Error('源码中出现明文密码');
+  const panel = readFileSync(join(root, 'lib', 'webpanel.js'), 'utf8');
+  if (!panel.includes("'/api/qqg/setup'")) throw new Error('缺少首次设置密码接口');
+  const html = readFileSync(join(root, 'webpanel', 'index.html'), 'utf8');
+  if (!html.includes('id="setup-form"')) throw new Error('缺少首次设置密码页面');
+  return '首次设密 + 字母数字策略';
+});
+
 for (const r of results) {
   console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? '  -> ' + r.detail : ''}`);
 }

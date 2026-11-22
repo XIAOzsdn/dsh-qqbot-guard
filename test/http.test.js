@@ -105,6 +105,30 @@ test('保存设置会归一化并热更新', async () => {
   cleanup();
 });
 
+test('修改日志记录设置变更并支持关键字筛选', async () => {
+  const { routes, cleanup } = setup();
+  const saved = await call(routes, '/api/qqbot-guard/settings', 'POST', {
+    body: { patch: { moderation: { action: 'mute' } } },
+    headers: { 'content-type': 'application/json', 'x-qqbot-guard': '1' },
+  });
+  assert.equal(saved.json.ok, true);
+
+  const all = await call(routes, '/api/qqbot-guard/changelog');
+  assert.equal(all.json.ok, true);
+  assert.ok(all.json.data.items.length >= 1);
+  const item = all.json.data.items[0];
+  assert.equal(item.action, 'update');
+  assert.equal(item.userName, '宿主设置页');
+  assert.match(item.detail, /违规动作/u);
+  assert.match(item.detail, /禁言/u);
+
+  const hit = await call(routes, '/api/qqbot-guard/changelog', 'GET', { query: '?keyword=禁言' });
+  assert.equal(hit.json.data.items.length, 1);
+  const miss = await call(routes, '/api/qqbot-guard/changelog', 'GET', { query: '?keyword=不存在的关键字' });
+  assert.equal(miss.json.data.items.length, 0);
+  cleanup();
+});
+
 test('成员搜索返回台账数据', async () => {
   const { routes, store, cleanup } = setup();
   store.upsertMember('g1', 'u2', { name: '阿强' });

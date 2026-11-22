@@ -1,7 +1,7 @@
 {
   "name": "dsh-qqbot-guard",
-  "version": "1.0.1",
-  "description": "QQ 群管理插件：违规防护、入群审批、入群欢迎、公告发布与管理。无 AI 对话、无表情包。",
+  "version": "1.1.0",
+  "description": "QQ 群管理插件：违规防护、入群审批、入群欢迎、入群答题、观察期、公告管理、独立局域网控制台。无 AI 对话、无表情包。",
   "type": "module",
   "private": true,
   "exports": {
@@ -14,6 +14,7 @@
     "index.js",
     "client.js",
     "lib",
+    "webpanel",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

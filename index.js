@@ -10,7 +10,11 @@ import { Store } from './lib/store.js';
 import { BotManager } from './lib/bot.js';
 import { Config, mergeSettings } from './lib/config.js';
 import { buildSaveSettings, mountRoutes } from './lib/http.js';
+import { createApi } from './lib/api.js';
+import { AuthStore } from './lib/auth.js';
+import { WebPanel } from './lib/webpanel.js';
 import { checkCompat } from './lib/compat.js';
+import { LIMITS } from './lib/defaults.js';
 import { PLUGIN_NAME, PLUGIN_VERSION } from './lib/meta.js';
 
 export { Config };
@@ -64,6 +68,7 @@ export function apply(ctx, config) {
   const dispose = () => {
     try { runtime.disposed = true; } catch { /* ignore */ }
     try { runtime.getBot()?.dispose?.(); } catch { /* ignore */ }
+    try { runtime.panel?.dispose?.(); } catch { /* ignore */ }
     try { runtime.store.dispose(); } catch { /* ignore */ }
   };
   try {
@@ -117,18 +122,68 @@ function createRuntime(ctx, config, logger) {
 
   let bot;
   let restarting = false;
+  const auth = new AuthStore(dataDir);
   const runtime = {
     dataDir,
     store,
     logger,
+    auth,
     version: PLUGIN_VERSION,
     disposed: false,
+    challenges: new Map(),
     getBot: () => bot,
     getClient: () => bot?.client,
     getCompat: () => checkCompat({ dataDir, webAvailable: hasWebServer(ctx) }),
     saveSettings: null,
     restartBot,
     startBot,
+  };
+  runtime.api = createApi(runtime);
+  const panel = new WebPanel(runtime);
+  runtime.panel = panel;
+  runtime.getPanelInfo = () => panel.info();
+  runtime.applyPanelSettings = async () => {
+    try {
+      return await panel.restart();
+    } catch (error) {
+      logger.warn?.(`[qqbot-guard] 面板重启失败：${errorText(error)}`);
+      return { ok: false, error: errorText(error) };
+    }
+  };
+  runtime.notifySettingsChange = (info) => {
+    const client = runtime.getClient();
+    if (!client) return { queued: false, reason: '机器人未连接' };
+    const groups = Object.keys(store.state.groups).slice(0, LIMITS.notifyMaxGroups);
+    if (!groups.length) return { queued: false, reason: '还没有已加入的群' };
+    const settings = store.settings;
+    const roleLabel = info?.role === 'admin' ? '最高管理员' : '普通管理员';
+    const lines = [
+      '【设置变更通知】',
+      `操作者：${roleLabel}`,
+      `时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+      info?.ip ? `来源：${info.ip}` : '',
+      ...(Array.isArray(info?.summary) ? info.summary : []),
+    ].filter(Boolean).join('\n').slice(0, LIMITS.notifyMaxChars);
+    void (async () => {
+      for (const gid of groups) {
+        try {
+          let target = String(settings.panel.notifyOpenid || '').trim();
+          if (!target) target = store.findMemberByName(gid, settings.panel.notifyName)?.uid || '';
+          const text = (target ? `<@${target}> ` : '') + lines;
+          const r = await client.sendGroupText(gid, text);
+          store.appendAudit({
+            kind: 'config', action: 'notify', groupId: gid,
+            groupName: store.state.groups[gid]?.name || '',
+            userId: target, userName: target ? settings.panel.notifyName : '',
+            detail: r.ok ? '已发送设置变更通知' : `通知发送失败：${r.err?.human || ''}`,
+            ok: r.ok, code: r.ok ? '' : r.err?.code || '', confidence: 1,
+          });
+        } catch (error) {
+          logger.warn?.(`[qqbot-guard] 设置变更通知失败 ${gid}：${errorText(error)}`);
+        }
+      }
+    })();
+    return { queued: true, groups: groups.length, notifyName: settings.panel.notifyName };
   };
 
   const compat = checkCompat({ dataDir });
@@ -183,6 +238,9 @@ function createRuntime(ctx, config, logger) {
   }
 
   logger.info?.(`[qqbot-guard] 数据目录：${dataDir}`);
+  void panel.start().catch((error) => {
+    logger.warn?.(`[qqbot-guard] 独立面板启动异常：${errorText(error)}`);
+  });
   return runtime;
 }
 

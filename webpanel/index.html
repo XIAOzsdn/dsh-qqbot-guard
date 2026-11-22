@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>青衫群管 · 控制台</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="setup" class="login hidden">
+    <div class="login-card">
+      <div class="brand">
+        <span class="logo">青</span>
+        <div>
+          <h1>青衫群管</h1>
+          <p>首次使用 · 设置面板密码</p>
+        </div>
+      </div>
+      <form id="setup-form" autocomplete="off">
+        <p class="hint">密码至少 8 位，必须同时包含字母和数字，且两个角色的密码不能相同。</p>
+        <label>最高管理员密码
+          <input id="setup-admin" type="password" placeholder="字母 + 数字" required>
+        </label>
+        <label>确认最高管理员密码
+          <input id="setup-admin2" type="password" required>
+        </label>
+        <label>普通管理员密码
+          <input id="setup-operator" type="password" placeholder="字母 + 数字" required>
+        </label>
+        <label>确认普通管理员密码
+          <input id="setup-operator2" type="password" required>
+        </label>
+        <button class="btn primary block" type="submit">保存并进入控制台</button>
+        <p id="setup-error" class="error"></p>
+      </form>
+      <p class="hint">最高管理员拥有全部权限；普通管理员只能修改违规词、模糊别名和入群欢迎语。</p>
+    </div>
+  </div>
+
+  <div id="login" class="login hidden">
+    <div class="login-card">
+      <div class="brand">
+        <span class="logo">青</span>
+        <div>
+          <h1>青衫群管</h1>
+          <p>QQ 群管理控制台</p>
+        </div>
+      </div>
+      <form id="login-form" autocomplete="off">
+        <label>访问密码
+          <input id="login-password" type="password" placeholder="最高管理员或普通管理员密码" required>
+        </label>
+        <button class="btn primary block" type="submit">登录</button>
+        <p id="login-error" class="error"></p>
+      </form>
+      <p class="hint">最高管理员可修改全部设置；普通管理员只能修改违规词与入群欢迎语。</p>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand small">
+        <span class="logo">青</span>
+        <div>
+          <h1>青衫群管</h1>
+          <p id="panel-url">控制台</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="role-badge" class="badge">未登录</span>
+        <span id="bot-badge" class="badge off">未连接</span>
+        <button id="logout" class="btn ghost" type="button">退出</button>
+      </div>
+    </header>
+
+    <nav id="tabs" class="tabs"></nav>
+
+    <main>
+      <section id="view"></section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h3 id="modal-title">确认操作</h3>
+      <p id="modal-text"></p>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn ghost" type="button">取消</button>
+        <button id="modal-ok" class="btn danger" type="button">继续</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
