@@ -616,10 +616,11 @@ function renderModeration(el) {
         `).join('') || '<div class="empty">暂无信任成员</div>'}
       </div>
       ${ro ? '' : `<div class="row" style="margin-top:10px">
-        <input id="trusted-uid" class="grow" placeholder="成员 openid（可在“群与成员”里复制）">
-        <input id="trusted-name" placeholder="昵称（可选）">
-        <button id="trusted-add" class="btn">添加</button>
-      </div>`}
+        <input id="trusted-q" class="grow" placeholder="搜索成员昵称 / openid">
+        <button id="trusted-search" class="btn">搜索</button>
+      </div>
+      <div id="trusted-results" class="list" style="margin-top:8px"></div>
+      <p class="hint">搜不到时，让该成员先在群里发一句话。</p>`}
     </div>
 
     <div class="row" style="margin-top:14px">
@@ -634,12 +635,19 @@ function renderModeration(el) {
         render();
       });
     }
-    $('trusted-add').addEventListener('click', () => {
-      const uid = $('trusted-uid').value.trim();
-      if (!uid) return toast('请填写 openid', true);
-      state.draft.moderation.trustedUsers.push({ uid, name: $('trusted-name').value.trim(), note: '' });
-      render();
+    $('trusted-search').addEventListener('click', async () => {
+      const list = await searchMembers($('trusted-q').value, '');
+      paintMemberResults($('trusted-results'), list, (m) => {
+        if (!m.uid) return;
+        if (state.draft.moderation.trustedUsers.some((x) => x.uid === m.uid)) {
+          return toast('已在信任成员里', true);
+        }
+        state.draft.moderation.trustedUsers.push({ uid: m.uid, name: m.name || '', note: '' });
+        toast('已添加，记得保存');
+        render();
+      }, '添加');
     });
+    $('trusted-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('trusted-search').click(); });
   }
 
   $('m-save').addEventListener('click', () => {
@@ -849,6 +857,25 @@ function groupList() {
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
+/** 成员搜索：供信任成员、黑名单、指令白名单等页面复用 */
+async function searchMembers(q, gid = '') {
+  const r = await req(`/members?gid=${encodeURIComponent(gid)}&q=${encodeURIComponent(q)}`);
+  return r.ok ? (r.data.members || []) : [];
+}
+
+function paintMemberResults(el, members, onPick, actionLabel = '选择') {
+  if (!el) return;
+  el.innerHTML = members.map((m, i) => `
+    <div class="item"><div class="main">
+      <div class="title">${esc(m.name || '(无昵称)')}${m.pending ? ' <span class="pill warn">待审批</span>' : ''}</div>
+      <div class="meta mono">${esc(m.gid)} · ${esc(m.uid)}</div>
+    </div><button class="btn" data-pick="${i}">${esc(actionLabel)}</button></div>`).join('')
+    || '<div class="empty">没有匹配成员；让他先在群里发一句话</div>';
+  for (const btn of el.querySelectorAll('[data-pick]')) {
+    btn.addEventListener('click', () => onPick(members[Number(btn.dataset.pick)]));
+  }
+}
+
 function renderGroups(el) {
   const groups = groupList();
   const ro = !admin();
@@ -991,6 +1018,11 @@ function renderBlacklist(el) {
     </div>
     <div class="card">
       <h3>手动加入黑名单</h3>
+      <div class="row" style="margin-bottom:10px">
+        <input id="b-q" class="grow" placeholder="搜索成员昵称 / openid">
+        <button id="b-search" class="btn">搜索</button>
+      </div>
+      <div id="b-results" class="list" style="margin-bottom:10px"></div>
       <div class="grid cols-3">
         <label class="field"><span>群</span><select id="b-gid">${groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name || g.gid)}</option>`).join('')}</select></label>
         <label class="field"><span>成员 openid</span><input id="b-uid"></label>
@@ -999,6 +1031,18 @@ function renderBlacklist(el) {
       <label class="field"><span>原因</span><input id="b-reason" placeholder="例如：多次发广告"></label>
       <button id="b-add" class="btn primary">加入黑名单</button>
     </div>`;
+
+  $('b-search').addEventListener('click', async () => {
+    const list = await searchMembers($('b-q').value, '');
+    paintMemberResults($('b-results'), list, (m) => {
+      const sel = $('b-gid');
+      if ([...sel.options].some((o) => o.value === m.gid)) sel.value = m.gid;
+      $('b-uid').value = m.uid;
+      $('b-name').value = m.name || '';
+      toast('已填入成员信息');
+    }, '填入');
+  });
+  $('b-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('b-search').click(); });
 
   $('b-add').addEventListener('click', async () => {
     const r = await req('/blacklist', {
@@ -1159,9 +1203,16 @@ function renderSettings(el) {
       <h3>群内管理员指令</h3>
       <div class="row">
         <label class="check"><input id="s-cmd" type="checkbox" ${s.commands.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用指令</label>
+        <label class="check"><input id="s-natural" type="checkbox" ${s.commands.naturalEnabled ? 'checked' : ''} ${disabledAttr(ro)}>允许受信任成员 @机器人 用自然语言下指令</label>
         <label class="field"><span>前缀</span><input id="s-cmd-prefix" value="${esc(s.commands.prefix)}" style="width:80px" ${disabledAttr(ro)}></label>
       </div>
+      <p class="hint">示例：@机器人 看看群里有多少人；@机器人 把“某某”踢出群聊并拉黑；@机器人 禁言“某某”10分钟。无论成功失败都会回复结果与原因。</p>
       <label class="field"><span>允许使用的成员 openid（每行一个；信任成员自动允许）</span><textarea id="s-cmd-users" ${disabledAttr(ro)}>${esc(lines(s.commands.allowUsers))}</textarea></label>
+      <div class="row" style="margin-bottom:8px">
+        <input id="cmd-q" class="grow" placeholder="搜索成员昵称 / openid">
+        <button id="cmd-search" class="btn">搜索</button>
+      </div>
+      <div id="cmd-results" class="list" style="margin-bottom:10px"></div>
       <label class="field"><span>群规文本（/rule 返回）</span><textarea id="s-rule" ${disabledAttr(ro)}>${esc(s.commands.ruleText)}</textarea></label>
     </div>
 
@@ -1403,6 +1454,18 @@ function renderSettings(el) {
   });
   syncAiProvider();
 
+  $('cmd-search').addEventListener('click', async () => {
+    const list = await searchMembers($('cmd-q').value, '');
+    paintMemberResults($('cmd-results'), list, (m) => {
+      const ta = $('s-cmd-users');
+      const current = parseLines(ta.value);
+      if (current.includes(m.uid)) return toast('已在白名单里', true);
+      ta.value = current.concat([m.uid]).join('\n');
+      toast('已加入白名单（记得保存）');
+    }, '加入白名单');
+  });
+  $('cmd-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('cmd-search').click(); });
+
   $('s-save').addEventListener('click', async () => {
     s.appId = $('s-appid').value.trim();
     const secret = $('s-secret').value;
@@ -1428,6 +1491,7 @@ function renderSettings(el) {
     s.panel.notifyName = notifyName;
     s.panel.notifyOpenid = notifyUid;
     s.commands.enabled = $('s-cmd').checked;
+    s.commands.naturalEnabled = $('s-natural').checked;
     s.commands.prefix = $('s-cmd-prefix').value.trim() || '/';
     s.commands.allowUsers = parseLines($('s-cmd-users').value);
     s.commands.ruleText = $('s-rule').value;

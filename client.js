@@ -615,23 +615,52 @@ window.__ModuleLoader__.load({
           h(Btn, { variant: 'primary', disabled: saving, onClick: doSave }, saving ? '保存中…' : '保存违规防护设置')));
     }
 
+    function MemberSearch(props) {
+      var qState = useState('');
+      var q = qState[0];
+      var setQ = qState[1];
+      var listState = useState([]);
+      var list = listState[0];
+      var setList = listState[1];
+      var busyState = useState(false);
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      async function go() {
+        setBusy(true);
+        var r = await api('members?gid=' + encodeURIComponent(props.gid || '') + '&q=' + encodeURIComponent(q));
+        setBusy(false);
+        if (r.ok) setList(r.data.members || []);
+      }
+      return h('div', { style: props.style },
+        h('div', { className: 'qqg-row' },
+          h('div', { style: { flex: 1, minWidth: 180 } },
+            h(TextInput, {
+              value: q,
+              placeholder: props.placeholder || '搜索成员昵称 / openid',
+              onChange: setQ,
+            })),
+          h(Btn, { onClick: go, disabled: busy }, busy ? '搜索中…' : '搜索')),
+        list.length
+          ? h('div', { className: 'qqg-list', style: { marginTop: 8 } }, list.map(function (m) {
+            return h('div', { className: 'qqg-item', key: (m.gid || '') + '|' + m.uid },
+              h('div', { className: 'qqg-main' },
+                h('div', { style: { fontWeight: 600 } }, m.name || '(无昵称)'),
+                h('div', { className: 'qqg-mono' }, (m.gid || '') + ' · ' + m.uid)),
+              h(Btn, { onClick: function () { props.onPick(m); } }, props.actionLabel || '选择'));
+          }))
+          : null);
+    }
+
     function TrustedAdd(props) {
-      var uidState = useState('');
-      var uid = uidState[0];
-      var setUid = uidState[1];
-      var nameState = useState('');
-      var name = nameState[0];
-      var setName = nameState[1];
-      return h('div', { className: 'qqg-row', style: { marginTop: 10 } },
-        h('div', { style: { flex: 1, minWidth: 160 } }, h(TextInput, { value: uid, placeholder: '成员 openid（可在“群与成员”里复制）', onChange: setUid })),
-        h('div', { style: { width: 160 } }, h(TextInput, { value: name, placeholder: '昵称（可选）', onChange: setName })),
-        h(Btn, {
-          onClick: function () {
-            props.onAdd({ uid: uid.trim(), name: name.trim() });
-            setUid('');
-            setName('');
+      return h('div', null,
+        h(MemberSearch, {
+          actionLabel: '添加为信任成员',
+          onPick: function (m) {
+            if (m && m.uid) props.onAdd({ uid: m.uid, name: m.name || '' });
           },
-        }, '添加'));
+        }),
+        h('div', { className: 'qqg-hint', style: { marginTop: 6 } },
+          '搜不到时，让该成员先在群里发一句话，机器人才能看到。'));
     }
 
     function JoinTab(props) {
@@ -1130,6 +1159,18 @@ window.__ModuleLoader__.load({
             : h(Empty, { text: '黑名单为空' })),
         h('div', { className: 'qqg-card' },
           h('h4', null, '手动加入黑名单'),
+          h(MemberSearch, {
+            actionLabel: '填入',
+            style: { marginBottom: 10 },
+            onPick: function (m) {
+              var gidOk = groups.some(function (g) { return g.gid === m.gid; });
+              setForm(Object.assign({}, form, {
+                gid: gidOk ? m.gid : form.gid,
+                uid: m.uid,
+                name: m.name || '',
+              }));
+            },
+          }),
           h('div', { className: 'qqg-row' },
             h(Field, { label: '群' },
               h(Select, {
@@ -1522,9 +1563,26 @@ window.__ModuleLoader__.load({
           h('h4', null, '群内管理员指令'),
           h('div', { className: 'qqg-row' },
             h(Check, { checked: draft.commands.enabled, label: '启用指令', onChange: function (v) { set('commands.enabled', v); } }),
+            h(Check, {
+              checked: draft.commands.naturalEnabled,
+              label: '允许受信任成员 @机器人 用自然语言下指令',
+              onChange: function (v) { set('commands.naturalEnabled', v); },
+            }),
             h(Field, { label: '前缀' }, h(TextInput, { value: draft.commands.prefix || '/', onChange: function (v) { set('commands.prefix', v); }, style: { width: 80 } }))),
           h(Field, { label: '允许使用的成员 openid（每行一个；信任成员自动允许）', wide: true },
             h(TextArea, { value: listToLines(draft.commands.allowUsers), onChange: function (v) { set('commands.allowUsers', linesToList(v)); } })),
+          h(MemberSearch, {
+            actionLabel: '加入白名单',
+            style: { marginBottom: 10 },
+            onPick: function (m) {
+              var cur = draft.commands.allowUsers || [];
+              if (cur.indexOf(m.uid) >= 0) {
+                props.notify('已在白名单里');
+                return;
+              }
+              set('commands.allowUsers', cur.concat([m.uid]));
+            },
+          }),
           h(Field, { label: '群规文本（/rule 返回）', wide: true },
             h(TextArea, { value: draft.commands.ruleText || '', onChange: function (v) { set('commands.ruleText', v); } }))),
         h('div', { className: 'qqg-card' },
