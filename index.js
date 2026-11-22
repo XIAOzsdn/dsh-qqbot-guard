@@ -14,6 +14,7 @@ import { createApi } from './lib/api.js';
 import { AuthStore } from './lib/auth.js';
 import { WebPanel } from './lib/webpanel.js';
 import { checkCompat } from './lib/compat.js';
+import { mention } from './lib/qq-api.js';
 import { LIMITS } from './lib/defaults.js';
 import { PLUGIN_NAME, PLUGIN_VERSION } from './lib/meta.js';
 
@@ -167,13 +168,27 @@ function createRuntime(ctx, config, logger) {
       ...(Array.isArray(info?.summary) ? info.summary : []),
     ].filter(Boolean).join('\n').slice(0, LIMITS.notifyMaxChars);
     void (async () => {
+      // @ 仅对普通管理员生效；昵称与 openid 必须同时匹配同一位成员。
+      // 台账里没有记录时（成员没发过言 / 台账被裁剪），再用官方昵称接口兜底校验一次。
+      let apiVerified;
+      const resolveTarget = async (gid) => {
+        if (info?.role !== 'operator' || !notifyName || !notifyUid) return '';
+        const member = store.findMemberByUidAndName(gid, notifyUid, notifyName);
+        if (member) return member.uid;
+        if (apiVerified === undefined) {
+          const r = await client.getUserInfo?.(notifyUid);
+          const nickname = String(r?.ok ? (r.data?.username || r.data?.nickname || '') : '').trim();
+          apiVerified = !!nickname && nickname.toLowerCase() === notifyName.toLowerCase();
+          if (!apiVerified) {
+            logger.warn?.(`[qqbot-guard] 通知对象未通过校验：昵称「${notifyName}」与 openid 对应的官方昵称「${nickname || '未知'}」不一致`);
+          }
+        }
+        return apiVerified ? notifyUid : '';
+      };
       for (const gid of groups) {
         try {
-          // @ 仅对普通管理员生效；昵称与 openid 必须同时匹配同一位成员
-          const target = info?.role === 'operator' && notifyName && notifyUid
-            ? (store.findMemberByUidAndName(gid, notifyUid, notifyName)?.uid || '')
-            : '';
-          const text = (target ? `<@${target}> ` : '') + lines;
+          const target = await resolveTarget(gid);
+          const text = (target ? mention(target) + ' ' : '') + lines;
           const r = await client.sendGroupText(gid, text);
           store.appendAudit({
             kind: 'config', action: 'notify', groupId: gid,

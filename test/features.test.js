@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { normalizeSettings, effectiveJoin, effectiveModeration } from '../lib/config.js';
 import { matchRules, Moderation } from '../lib/moderation.js';
+import { mention } from '../lib/qq-api.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, tickQuizzes } from '../lib/join.js';
 import { AuthStore, LoginGuard, SessionStore, checkPasswordPolicy } from '../lib/auth.js';
 import { isBasicPatch } from '../lib/api.js';
@@ -264,4 +265,17 @@ test('设备信息包含版本、CPU 与内存', () => {
   assert.ok(d.memTotal > 0);
   assert.equal(typeof d.cpuUsage, 'number');
   assert.equal(typeof d.memUsage, 'number');
+});
+
+test('群聊 @ 使用官方 qqbot-at-user 标签', () => {
+  assert.equal(mention('abc123'), '<qqbot-at-user id="abc123" />');
+  assert.equal(mention('bad"id'), '<qqbot-at-user id="badid" />');
+  assert.equal(mention(''), '');
+});
+
+test('入群拒绝理由可保存并带默认值', () => {
+  const custom = normalizeSettings({ join: { rejectReason: '请完善申请资料' } });
+  assert.equal(custom.value.join.rejectReason, '请完善申请资料');
+  const fallback = normalizeSettings({ join: {} });
+  assert.equal(fallback.value.join.rejectReason, '暂不符合入群条件');
 });

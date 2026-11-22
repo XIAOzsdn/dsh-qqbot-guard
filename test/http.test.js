@@ -140,6 +140,44 @@ test('成员搜索返回台账数据', async () => {
   cleanup();
 });
 
+test('通知对象校验：昵称与 openid 必须同时匹配', async () => {
+  const { routes, runtime, store, cleanup } = setup();
+  store.upsertMember('g1', 'u1', { name: '群主' });
+  const headers = { 'content-type': 'application/json', 'x-qqbot-guard': '1' };
+
+  let r = await call(routes, '/api/qqbot-guard/notify/verify', 'POST', {
+    body: { name: '群主', uid: 'u1' }, headers,
+  });
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.data.matched, true);
+  assert.equal(r.json.data.source, 'ledger');
+
+  // 昵称不匹配：确定性失败
+  r = await call(routes, '/api/qqbot-guard/notify/verify', 'POST', {
+    body: { name: '别人', uid: 'u1' }, headers,
+  });
+  assert.equal(r.json.data.matched, false);
+  assert.equal(r.json.data.definite, true);
+
+  // 台账没有记录，但官方昵称接口能佐证
+  runtime.getBot().client = { getUserInfo: async () => ({ ok: true, data: { username: '群主' } }) };
+  r = await call(routes, '/api/qqbot-guard/notify/verify', 'POST', {
+    body: { name: '群主', uid: 'unknown-openid' }, headers,
+  });
+  assert.equal(r.json.data.matched, true);
+  assert.equal(r.json.data.source, 'api');
+
+  // 填成 QQ 号时应提示改用 openid
+  runtime.getBot().client = null;
+  r = await call(routes, '/api/qqbot-guard/notify/verify', 'POST', {
+    body: { name: '群主', uid: '123456789' }, headers,
+  });
+  assert.equal(r.json.data.matched, false);
+  assert.equal(r.json.data.definite, true);
+  assert.match(r.json.data.reason, /openid/u);
+  cleanup();
+});
+
 test('公告创建与发布接口', async () => {
   const { routes, store, runtime, cleanup } = setup();
   runtime.getBot().client = { sendGroupText: async () => ({ ok: true }) };

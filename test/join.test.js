@@ -108,6 +108,6 @@ test('欢迎语按种子固定且替换变量', async () => {
   const texts = client.calls.filter((x) => x[0] === 'send').map((x) => x[2]);
   assert.equal(texts.length, 2);
   assert.equal(texts[0], texts[1]);
-  assert.match(texts[0], /<@u5>/);
+  assert.match(texts[0], /<qqbot-at-user id="u5" \/>/u);
   cleanup();
 });

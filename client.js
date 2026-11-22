@@ -1,6 +1,6 @@
 /* QQ 群管家 — 浏览器半边（手写模块，无需构建）。
  * 注册「设置 → QQ 群管家」整页，所有数据走同源 /api/qqbot-guard/*。
- * 不依赖任何 AI 会话；只在面板打开时做低频状态刷新。
+ * 标签页、字段与独立局域网面板保持一致，避免两处设置不一致。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-qqbot-guard',
@@ -9,7 +9,6 @@ window.__ModuleLoader__.load({
     var h = React.createElement;
     var useState = React.useState;
     var useEffect = React.useEffect;
-    var useMemo = React.useMemo;
 
     var API = 'api/qqbot-guard/';
 
@@ -23,7 +22,8 @@ window.__ModuleLoader__.load({
       '.qqg-tab{border:0;background:transparent;color:var(--dsw-alias-text-secondary,#6b7280);padding:8px 12px;border-radius:8px 8px 0 0;cursor:pointer;font:inherit}',
       '.qqg-tab[data-on="1"]{color:#6b5ae6;background:rgba(124,108,240,.10);font-weight:600;box-shadow:inset 0 -2px 0 #6b5ae6}',
       '.qqg-card{background:var(--dsw-alias-bg-primary,#fff);border:1px solid var(--dsw-alias-border-primary,#e5e6eb);border-radius:10px;padding:14px;margin-bottom:12px}',
-      '.qqg-card h4{margin:0 0 10px;font-size:13.5px;font-weight:650}',
+      '.qqg-card h4{margin:0 0 10px;font-size:13.5px;font-weight:650;display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.qqg-card h4 .qqg-sub{font-weight:400}',
       '.qqg-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}',
       '.qqg-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;min-width:160px}',
       '.qqg-field>span{font-size:12px;color:var(--dsw-alias-text-secondary,#6b7280)}',
@@ -52,11 +52,26 @@ window.__ModuleLoader__.load({
       '.qqg-table{width:100%;border-collapse:collapse;font-size:12px}',
       '.qqg-table th,.qqg-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-primary,#eceef2);vertical-align:top}',
       '.qqg-table th{color:var(--dsw-alias-text-secondary,#6b7280);font-weight:500}',
+      '.qqg-table-wrap{overflow-x:auto}',
       '.qqg-toast{position:sticky;bottom:8px;margin-top:10px;padding:8px 12px;border-radius:8px;background:rgba(31,158,79,.12);border:1px solid rgba(31,158,79,.3);color:#187a3d;font-size:12px}',
       '.qqg-toast[data-err="1"]{background:rgba(221,51,51,.1);border-color:rgba(221,51,51,.3);color:#b02020}',
       '.qqg-note{font-size:12px;color:var(--dsw-alias-text-secondary,#6b7280);background:rgba(124,108,240,.07);border:1px solid rgba(124,108,240,.2);border-radius:8px;padding:8px 10px;margin:8px 0}',
+      '.qqg-hint{font-size:12px;color:var(--dsw-alias-text-secondary,#6b7280)}',
       '.qqg-check{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;margin:0 14px 8px 0}',
       '.qqg-empty{padding:28px 0;text-align:center;color:var(--dsw-alias-text-secondary,#8a919c);font-size:12.5px}',
+      '.qqg-kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;font-size:12px}',
+      '.qqg-kv dt{color:var(--dsw-alias-text-secondary,#6b7280)}',
+      '.qqg-kv dd{margin:0;word-break:break-all}',
+      '.qqg-device{display:grid;grid-template-columns:minmax(220px,280px) 1fr;grid-template-areas:"id metrics" "sys metrics";gap:12px;background:var(--dsw-alias-bg-primary,#fff);border:1px solid var(--dsw-alias-border-primary,#e5e6eb);border-radius:10px;padding:14px;margin-bottom:12px}',
+      '.qqg-device-id{grid-area:id;display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #eceef2;border-radius:8px;background:#f7f8fd}',
+      '.qqg-avatar{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#6b5ae6,#8d7bf0);color:#fff;font-weight:700;font-size:14px;flex:none}',
+      '.qqg-device-sys{grid-area:sys;padding:12px;border:1px solid #eceef2;border-radius:8px;background:#f7f8fd}',
+      '.qqg-device-metrics{grid-area:metrics;display:grid;gap:10px}',
+      '.qqg-metric{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 12px;border:1px solid #eceef2;border-radius:8px;background:#f7f8fd}',
+      '.qqg-gauge{--p:0;width:82px;height:82px;border-radius:50%;flex:none;display:grid;place-items:center;background:conic-gradient(#6b5ae6 calc(var(--p)*1%),#e8eaf2 0)}',
+      '.qqg-gauge>div{width:66px;height:66px;border-radius:50%;background:var(--dsw-alias-bg-primary,#fff);display:grid;place-items:center;text-align:center;font-size:11.5px;line-height:1.3}',
+      '.qqg-gauge b{font-size:14px}',
+      '@media(max-width:760px){.qqg-device{grid-template-columns:1fr;grid-template-areas:"id" "sys" "metrics"}}',
     ].join('');
 
     function ensureCss() {
@@ -103,6 +118,16 @@ window.__ModuleLoader__.load({
       return Math.floor(hh / 24) + ' 天 ' + (hh % 24) + ' 小时';
     }
 
+    function fmtBytes(n) {
+      var v = Number(n) || 0;
+      if (v < 1024) return v + ' B';
+      var units = ['KB', 'MB', 'GB', 'TB'];
+      var value = v / 1024;
+      var i = 0;
+      while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
+      return value.toFixed(value >= 100 ? 0 : 1) + ' ' + units[i];
+    }
+
     function statusView(status) {
       if (!status) return { t: 'off', label: '未初始化' };
       if (!status.configured) return { t: 'off', label: '未配置凭据' };
@@ -117,10 +142,15 @@ window.__ModuleLoader__.load({
       return (Array.isArray(list) ? list : []).join('\n');
     }
     function linesToList(text) {
-      return String(text || '')
-        .split(/\r?\n|,|，/u)
-        .map(function (x) { return x.trim(); })
-        .filter(Boolean);
+      var seen = {};
+      var out = [];
+      String(text || '').split(/\r?\n|,|，/u).forEach(function (raw) {
+        var s = raw.trim();
+        if (!s || seen[s]) return;
+        seen[s] = true;
+        out.push(s);
+      });
+      return out;
     }
     function setIn(obj, path, value) {
       var keys = path.split('.');
@@ -144,6 +174,20 @@ window.__ModuleLoader__.load({
       }
       return cur === undefined ? fallback : cur;
     }
+    function download(name, text) {
+      try {
+        var blob = new Blob([text], { type: 'application/octet-stream' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+      } catch (e) { /* ignore */ }
+    }
+    function csvCell(v) {
+      return '"' + String(v == null ? '' : v).replace(/"/gu, '""') + '"';
+    }
 
     function Btn(props) {
       return h('button', {
@@ -153,6 +197,7 @@ window.__ModuleLoader__.load({
         disabled: props.disabled,
         onClick: props.onClick,
         title: props.title,
+        style: props.style,
       }, props.children);
     }
 
@@ -183,6 +228,16 @@ window.__ModuleLoader__.load({
         max: props.max,
         onChange: function (e) { props.onChange(Number(e.target.value)); },
         style: { width: 110 },
+      });
+    }
+
+    function TextArea(props) {
+      return h('textarea', {
+        className: 'qqg-ta',
+        value: props.value == null ? '' : props.value,
+        placeholder: props.placeholder || '',
+        onChange: function (e) { props.onChange(e.target.value); },
+        style: props.style,
       });
     }
 
@@ -224,12 +279,21 @@ window.__ModuleLoader__.load({
         props.status && props.status.degraded ? '（降级）' : '');
     }
 
+    var ACTION_OPTIONS = [
+      { value: 'warn', label: '警告' },
+      { value: 'mute', label: '禁言' },
+      { value: 'kick', label: '移出群聊' },
+    ];
+
     var TABS = [
       { id: 'overview', label: '总览' },
       { id: 'moderation', label: '违规防护' },
+      { id: 'join', label: '入群' },
       { id: 'announcements', label: '公告' },
-      { id: 'join', label: '入群审批' },
       { id: 'groups', label: '群与成员' },
+      { id: 'blacklist', label: '黑名单' },
+      { id: 'audit', label: '审计' },
+      { id: 'changelog', label: '修改日志' },
       { id: 'settings', label: '设置' },
     ];
 
@@ -273,6 +337,8 @@ window.__ModuleLoader__.load({
               if (!prev) return prev;
               return Object.assign({}, prev, {
                 status: r.data.status,
+                panel: r.data.panel || prev.panel,
+                device: r.data.device || prev.device,
                 counts: Object.assign({}, prev.counts, { counters: r.data.counts }),
               });
             });
@@ -286,7 +352,7 @@ window.__ModuleLoader__.load({
         setTimeout(function () { setToast(null); }, 3200);
       }
 
-      async function save(patch) {
+      async function savePatch(patch) {
         var r = await api('settings', { patch: patch });
         if (r.ok) {
           setBoot(function (prev) { return prev ? Object.assign({}, prev, { settings: r.data }) : prev; });
@@ -306,13 +372,17 @@ window.__ModuleLoader__.load({
       }
       if (!boot) return h('div', { className: 'qqg-root' }, h(Empty, { text: '正在加载 QQ 群管家…' }));
 
+      var common = { boot: boot, savePatch: savePatch, reload: load, notify: notify };
       var body;
-      if (tab === 'moderation') body = h(ModerationTab, { settings: boot.settings, save: save });
-      else if (tab === 'announcements') body = h(AnnouncementsTab, { boot: boot, refresh: load, notify: notify });
-      else if (tab === 'join') body = h(JoinTab, { boot: boot, refresh: load, notify: notify, save: save });
-      else if (tab === 'groups') body = h(GroupsTab, { boot: boot, refresh: load, notify: notify });
-      else if (tab === 'settings') body = h(SettingsTab, { boot: boot, save: save });
-      else body = h(OverviewTab, { boot: boot, refresh: load });
+      if (tab === 'moderation') body = h(ModerationTab, common);
+      else if (tab === 'join') body = h(JoinTab, common);
+      else if (tab === 'announcements') body = h(AnnouncementsTab, common);
+      else if (tab === 'groups') body = h(GroupsTab, common);
+      else if (tab === 'blacklist') body = h(BlacklistTab, common);
+      else if (tab === 'audit') body = h(AuditTab, common);
+      else if (tab === 'changelog') body = h(ChangelogTab, common);
+      else if (tab === 'settings') body = h(SettingsTab, common);
+      else body = h(OverviewTab, common);
 
       return h('div', { className: 'qqg-root' },
         h('div', { className: 'qqg-head' },
@@ -342,6 +412,13 @@ window.__ModuleLoader__.load({
       var boot = props.boot;
       var st = boot.status || {};
       var c = (boot.counts && boot.counts.counters) || {};
+      var d = boot.device || {};
+      var panel = boot.panel || {};
+      var s = statusView(st);
+      var appId = (boot.settings && boot.settings.appId) || st.appIdMasked || '未配置';
+      var cpuPct = Math.max(0, Math.min(100, Number(d.cpuUsage) || 0));
+      var memPct = Math.max(0, Math.min(100, Number(d.memUsage) || 0));
+      var cpuSpeed = d.cpuSpeedMhz ? (Number(d.cpuSpeedMhz) / 1000).toFixed(2) : '-';
       var stats = [
         { label: '今日拦截', value: c.blocked || 0 },
         { label: '警告', value: c.warns || 0 },
@@ -352,7 +429,46 @@ window.__ModuleLoader__.load({
         { label: '欢迎', value: c.welcomes || 0 },
         { label: '公告', value: c.announces || 0 },
       ];
+      function gauge(pct, label) {
+        return h('div', { className: 'qqg-gauge', style: { '--p': pct } },
+          h('div', null, h('b', null, Math.round(pct) + '%'), h('span', { className: 'qqg-sub' }, label)));
+      }
       return h('div', null,
+        h('div', { className: 'qqg-device' },
+          h('div', { className: 'qqg-device-id' },
+            h('div', { className: 'qqg-avatar' }, 'QQ'),
+            h('div', { style: { minWidth: 0, flex: 1 } },
+              h('div', { style: { fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 } },
+                'QQ 机器人',
+                h('span', { className: 'qqg-pill', 'data-t': s.t }, s.label)),
+              h('div', { className: 'qqg-mono' }, appId))),
+          h('div', { className: 'qqg-device-sys' },
+            h('h4', null, '系统信息'),
+            h('dl', { className: 'qqg-kv' },
+              h('dt', null, '插件版本'), h('dd', null, 'v' + (boot.version || '')),
+              h('dt', null, 'WebUI 版本'), h('dd', null, 'v' + (d.webuiVersion || boot.version || '')),
+              h('dt', null, 'NapCat 版本'), h('dd', null, d.napcatVersion || '未接入'),
+              h('dt', null, '系统版本'), h('dd', null, d.systemVersion || '-')),
+            h('div', { className: 'qqg-hint', style: { marginTop: 8 } }, '使用 QQ 官方 Bot API，不依赖 NapCat / QQ 客户端。')),
+          h('div', { className: 'qqg-device-metrics' },
+            h('div', { className: 'qqg-metric' },
+              h('div', null,
+                h('h4', null, 'CPU'),
+                h('dl', { className: 'qqg-kv' },
+                  h('dt', null, '型号'), h('dd', null, d.cpuModel || '未知'),
+                  h('dt', null, '内核数'), h('dd', null, (Number(d.cpuCores) || 0) + ' 核 · ' + cpuSpeed + ' GHz'),
+                  h('dt', null, '运行时长'), h('dd', null, fmtDuration(d.processUptimeMs)))),
+              gauge(cpuPct, 'CPU 占用')),
+            h('div', { className: 'qqg-metric' },
+              h('div', null,
+                h('h4', null, '内存'),
+                h('dl', { className: 'qqg-kv' },
+                  h('dt', null, '总量'), h('dd', null, fmtBytes(d.memTotal)),
+                  h('dt', null, '使用量'), h('dd', null, fmtBytes(d.memUsed)),
+                  h('dt', null, '本进程'), h('dd', null, fmtBytes(d.processRss)))),
+              gauge(memPct, '内存占用')),
+            h('div', { className: 'qqg-hint', style: { textAlign: 'right' } },
+              'Node ' + (d.nodeVersion || '-') + ' · ' + (d.hostName || '-') + ' · 系统运行 ' + fmtDuration(d.systemUptimeMs)))),
         h('div', { className: 'qqg-card' },
           h('h4', null, '连接状态'),
           h('div', { className: 'qqg-row', style: { gap: 18 } },
@@ -365,13 +481,20 @@ window.__ModuleLoader__.load({
           st.degraded ? h('div', { className: 'qqg-note' }, '入群申请事件未授权，已降级为普通群事件。') : null),
         h('div', { className: 'qqg-card' },
           h('h4', null, '今日统计'),
-          h('div', { className: 'qqg-grid' }, stats.map(function (s) {
-            return h('div', { className: 'qqg-stat', key: s.label }, h('b', null, String(s.value)), h('span', null, s.label));
+          h('div', { className: 'qqg-grid' }, stats.map(function (x) {
+            return h('div', { className: 'qqg-stat', key: x.label }, h('b', null, String(x.value)), h('span', null, x.label));
           }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '局域网面板'),
+          h('div', { className: 'qqg-row', style: { gap: 18 } },
+            h('div', null, h('div', { className: 'qqg-sub' }, '状态'), h('div', null, panel.running ? '运行中' : '未启动')),
+            h('div', null, h('div', { className: 'qqg-sub' }, '监听'), h('div', { className: 'qqg-mono' }, (panel.host || '-') + ':' + (panel.port || '-'))),
+            h('div', null, h('div', { className: 'qqg-sub' }, '访问地址'), h('div', { className: 'qqg-mono' }, (panel.urls || []).join(' · ') || '-'))),
+          panel.lastError ? h('div', { className: 'qqg-note' }, '启动失败：' + panel.lastError) : null),
         h('div', { className: 'qqg-card' },
           h('h4', null, '最近操作'),
           boot.audit && boot.audit.length
-            ? h('table', { className: 'qqg-table' },
+            ? h('div', { className: 'qqg-table-wrap' }, h('table', { className: 'qqg-table' },
               h('thead', null, h('tr', null, h('th', null, '时间'), h('th', null, '类型'), h('th', null, '动作'), h('th', null, '群'), h('th', null, '对象'), h('th', null, '详情'))),
               h('tbody', null, boot.audit.slice(0, 12).map(function (a, i) {
                 return h('tr', { key: i },
@@ -381,100 +504,277 @@ window.__ModuleLoader__.load({
                   h('td', { className: 'qqg-mono' }, a.groupName || a.groupId || '-'),
                   h('td', { className: 'qqg-mono' }, a.userName || a.userId || '-'),
                   h('td', null, a.detail || ''));
-              })))
+              }))))
             : h(Empty, { text: '还没有操作记录' })));
     }
 
     function ModerationTab(props) {
-      var settings = props.settings;
-      var sState = useState(settings);
+      var sState = useState(props.boot.settings.moderation);
       var draft = sState[0];
       var setDraft = sState[1];
-      var saveState = useState(false);
-      var saving = saveState[0];
-      var setSaving = saveState[1];
-      useEffect(function () { setDraft(settings); }, [settings]);
-      var mod = draft.moderation || {};
+      var savingState = useState(false);
+      var saving = savingState[0];
+      var setSaving = savingState[1];
+      useEffect(function () { setDraft(props.boot.settings.moderation); }, [props.boot.settings]);
 
-      function set(path, value) { setDraft(setIn(draft, 'moderation.' + path, value)); }
+      function set(path, value) { setDraft(setIn(draft, path, value)); }
       async function doSave() {
         setSaving(true);
-        await props.save(draft);
+        await props.savePatch({ moderation: draft });
+        setSaving(false);
+      }
+      var trusted = draft.trustedUsers || [];
+
+      return h('div', null,
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '基础策略'),
+          h(Check, { checked: draft.enabled, label: '启用违规防护', onChange: function (v) { set('enabled', v); } }),
+          h(Check, { checked: draft.fuzzy.enabled, label: '模糊变体匹配', onChange: function (v) { set('fuzzy.enabled', v); } }),
+          h(Check, { checked: draft.media.detectImages, label: '检测图片广告', onChange: function (v) { set('media.detectImages', v); } }),
+          h(Check, { checked: draft.media.detectCards, label: '检测卡片/名片', onChange: function (v) { set('media.detectCards', v); } }),
+          h('div', { className: 'qqg-note' }, '提示：需要在 QQ 开放平台为机器人开通「群聊全量消息」权限并设为群管理员，否则只能看到 @ 机器人的消息，无法覆盖全部群聊。'),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '命中后的动作' }, h(Select, { value: draft.action, onChange: function (v) { set('action', v); }, options: ACTION_OPTIONS })),
+            h(Field, { label: '禁言时长（秒）' }, h(NumberInput, { value: draft.muteSeconds, min: 1, max: 2592000, onChange: function (v) { set('muteSeconds', v); } })),
+            h(Field, { label: '同一用户冷却（秒）' }, h(NumberInput, { value: draft.cooldownSec, min: 0, max: 86400, onChange: function (v) { set('cooldownSec', v); } }))),
+          h(Field, { label: '警告文案（{user} 会被替换成 @成员）', wide: true },
+            h(TextArea, { value: draft.warnTemplate || '', onChange: function (v) { set('warnTemplate', v); } })),
+          h('div', { className: 'qqg-note' }, (props.boot.settings.ui && props.boot.settings.ui.notice) || '')),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '规则'),
+          h(Field, { label: '违规词（每行一个）', wide: true },
+            h(TextArea, { value: listToLines(draft.keywords), onChange: function (v) { set('keywords', linesToList(v)); } })),
+          h(Field, { label: '正则规则（每行一个，需符合 JS 正则语法）', wide: true },
+            h(TextArea, { value: listToLines(draft.regexes), onChange: function (v) { set('regexes', linesToList(v)); } })),
+          h(Field, { label: '额外模糊别名（每行一个，格式：别名=标准词）', wide: true },
+            h(TextArea, { value: listToLines(draft.fuzzy.extras), onChange: function (v) { set('fuzzy.extras', linesToList(v)); } })),
+          h(Field, { label: '图片广告关键词（每行一个）', wide: true },
+            h(TextArea, { value: listToLines(draft.media.adKeywords), onChange: function (v) { set('media.adKeywords', linesToList(v)); } }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '刷屏与升级处理'),
+          h(Check, { checked: draft.spam.enabled, label: '启用刷屏检测', onChange: function (v) { set('spam.enabled', v); } }),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '统计窗口（秒）' }, h(NumberInput, { value: draft.spam.windowSec, min: 1, max: 600, onChange: function (v) { set('spam.windowSec', v); } })),
+            h(Field, { label: '窗口内消息数' }, h(NumberInput, { value: draft.spam.maxMessages, min: 2, max: 100, onChange: function (v) { set('spam.maxMessages', v); } }))),
+          h(Check, { checked: draft.escalation.enabled, label: '启用多次违规升级', onChange: function (v) { set('escalation.enabled', v); } }),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '第几次违规升级' }, h(NumberInput, { value: draft.escalation.violations, min: 1, max: 100, onChange: function (v) { set('escalation.violations', v); } })),
+            h(Field, { label: '统计窗口（小时）' }, h(NumberInput, { value: draft.escalation.windowHours, min: 1, max: 720, onChange: function (v) { set('escalation.windowHours', v); } })),
+            h(Field, { label: '升级动作' }, h(Select, { value: draft.escalation.action, onChange: function (v) { set('escalation.action', v); }, options: ACTION_OPTIONS }))),
+          h(Field, { label: '豁免群 openid（每行一个，只记录不处置）', wide: true },
+            h(TextArea, { value: listToLines(draft.exemptGroups), onChange: function (v) { set('exemptGroups', linesToList(v)); } }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '链接与黑名单'),
+          h(Check, { checked: draft.detectLinks, label: '检测可疑链接（域名白名单外）', onChange: function (v) { set('detectLinks', v); } }),
+          h(Field, { label: '链接白名单（每行一个域名）', wide: true },
+            h(TextArea, { value: listToLines(draft.linkWhitelist), onChange: function (v) { set('linkWhitelist', linesToList(v)); } })),
+          h(Check, { checked: draft.blacklist.enabled, label: '启用累计黑名单', onChange: function (v) { set('blacklist.enabled', v); } }),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '第几次违规触发' }, h(NumberInput, { value: draft.blacklist.threshold, min: 1, max: 100, onChange: function (v) { set('blacklist.threshold', v); } })),
+            h(Field, { label: '统计窗口（天）' }, h(NumberInput, { value: draft.blacklist.windowDays, min: 1, max: 365, onChange: function (v) { set('blacklist.windowDays', v); } }))),
+          h(Check, { checked: draft.blacklist.addToGroupBlacklist, label: '同时加入官方群黑名单', onChange: function (v) { set('blacklist.addToGroupBlacklist', v); } })),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '信任成员', h('span', { className: 'qqg-sub' }, '豁免处置，并允许使用群指令')),
+          h('div', { className: 'qqg-list' },
+            trusted.length
+              ? trusted.map(function (u) {
+                return h('div', { className: 'qqg-item', key: u.uid },
+                  h('div', { className: 'qqg-main' },
+                    h('div', { style: { fontWeight: 600 } }, u.name || '未备注'),
+                    h('div', { className: 'qqg-mono' }, u.uid + (u.note ? ' · ' + u.note : ''))),
+                  h(Btn, {
+                    variant: 'danger',
+                    onClick: function () {
+                      set('trustedUsers', trusted.filter(function (x) { return x.uid !== u.uid; }));
+                    },
+                  }, '移除'));
+              })
+              : h(Empty, { text: '暂无信任成员' })),
+          h(TrustedAdd, { onAdd: function (item) {
+            if (!item.uid) return;
+            set('trustedUsers', trusted.concat([{ uid: item.uid, name: item.name, note: '' }]));
+          } })),
+        h('div', { style: { textAlign: 'right' } },
+          h(Btn, { variant: 'primary', disabled: saving, onClick: doSave }, saving ? '保存中…' : '保存违规防护设置')));
+    }
+
+    function TrustedAdd(props) {
+      var uidState = useState('');
+      var uid = uidState[0];
+      var setUid = uidState[1];
+      var nameState = useState('');
+      var name = nameState[0];
+      var setName = nameState[1];
+      return h('div', { className: 'qqg-row', style: { marginTop: 10 } },
+        h('div', { style: { flex: 1, minWidth: 160 } }, h(TextInput, { value: uid, placeholder: '成员 openid（可在“群与成员”里复制）', onChange: setUid })),
+        h('div', { style: { width: 160 } }, h(TextInput, { value: name, placeholder: '昵称（可选）', onChange: setName })),
+        h(Btn, {
+          onClick: function () {
+            props.onAdd({ uid: uid.trim(), name: name.trim() });
+            setUid('');
+            setName('');
+          },
+        }, '添加'));
+    }
+
+    function JoinTab(props) {
+      var sState = useState(props.boot.settings.join);
+      var draft = sState[0];
+      var setDraft = sState[1];
+      var savingState = useState(false);
+      var saving = savingState[0];
+      var setSaving = savingState[1];
+      var pendingState = useState(props.boot.pending || []);
+      var pending = pendingState[0];
+      var setPending = pendingState[1];
+      var busyState = useState('');
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      var gidState = useState((props.boot.groups && props.boot.groups[0] && props.boot.groups[0].gid) || '');
+      var syncGid = gidState[0];
+      var setSyncGid = gidState[1];
+      useEffect(function () { setDraft(props.boot.settings.join); }, [props.boot.settings]);
+      useEffect(function () { setPending(props.boot.pending || []); }, [props.boot.pending]);
+
+      function set(path, value) { setDraft(setIn(draft, path, value)); }
+      var join = draft;
+
+      async function act(item, action) {
+        setBusy(item.joinRequestId || item.memberOpenid || '');
+        var r = await api('join', {
+          action: action,
+          gid: item.groupId || item.group_id || '',
+          uid: item.memberOpenid,
+          jid: item.joinRequestId,
+          reason: '',
+        });
+        setBusy('');
+        if (r.ok) {
+          props.notify(action === 'approve' ? '已通过' : '已拒绝');
+          setPending(pending.filter(function (x) {
+            return !(x.groupId === item.groupId && x.joinRequestId === item.joinRequestId);
+          }));
+          props.reload();
+        } else {
+          props.notify((r.error && r.error.message) || '操作失败', true);
+        }
+      }
+
+      async function refreshRemote() {
+        if (!syncGid) return props.notify('还没有已登记的群', true);
+        setBusy('refresh');
+        var r = await api('join', { action: 'refresh', gid: syncGid });
+        setBusy('');
+        if (r.ok) {
+          props.notify('已同步官方待审批列表：新增 ' + r.data.count);
+          props.reload();
+        } else {
+          props.notify((r.error && r.error.message) || '同步失败', true);
+        }
+      }
+
+      async function doSave() {
+        setSaving(true);
+        await props.savePatch({ join: draft });
         setSaving(false);
       }
 
       return h('div', null,
         h('div', { className: 'qqg-card' },
-          h('h4', null, '基础策略'),
-          h(Check, { checked: mod.enabled, label: '启用违规防护', onChange: function (v) { set('enabled', v); } }),
-          h('div', { className: 'qqg-note' }, '提示：需要在 QQ 开放平台为机器人开通「群聊全量消息」权限并设为群管理员，否则只能看到 @ 机器人的消息，无法覆盖全部群聊。'),
+          h('h4', null, '待审批', h('span', { className: 'qqg-sub' }, '群内事件与应用内同步')),
           h('div', { className: 'qqg-row' },
-            h(Field, { label: '命中后的动作' },
+            h(Field, { label: '群' },
               h(Select, {
-                value: mod.action,
-                onChange: function (v) { set('action', v); },
-                options: [{ value: 'warn', label: '警告' }, { value: 'mute', label: '禁言' }, { value: 'kick', label: '移出群聊' }],
+                value: syncGid,
+                onChange: setSyncGid,
+                options: (props.boot.groups || []).map(function (g) {
+                  return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid };
+                }),
+                style: { minWidth: 260 },
               })),
-            h(Field, { label: '禁言时长（秒）' }, h(NumberInput, { value: mod.muteSeconds, min: 1, max: 2592000, onChange: function (v) { set('muteSeconds', v); } })),
-            h(Field, { label: '同一用户冷却（秒）' }, h(NumberInput, { value: mod.cooldownSec, min: 0, max: 86400, onChange: function (v) { set('cooldownSec', v); } }))),
-          h(Field, { label: '警告文案（{user} 会被替换成 @成员）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: mod.warnTemplate || '', onChange: function (e) { set('warnTemplate', e.target.value); } })),
-          h('div', { className: 'qqg-note' }, draft.ui && draft.ui.notice ? draft.ui.notice : '')),
+            h(Btn, { disabled: busy === 'refresh', onClick: refreshRemote }, busy === 'refresh' ? '同步中…' : '从官方同步')),
+          pending.length
+            ? h('div', { className: 'qqg-list' }, pending.map(function (item, i) {
+              var key = (item.groupId || '') + '|' + (item.joinRequestId || i);
+              return h('div', { className: 'qqg-item', key: key },
+                h('div', { className: 'qqg-main' },
+                  h('div', null,
+                    h('b', null, item.username || '未知昵称'), ' ',
+                    h('span', { className: 'qqg-mono' }, item.memberOpenid || ''), ' ',
+                    item.riskTips ? h('span', { className: 'qqg-pill', 'data-t': 'bad' }, '风险') : null),
+                  h('div', { className: 'qqg-sub' }, '验证：' + (item.verifyMessage || item.verify_message || '-') + ' · 来源：' + (item.applySource || '-')),
+                  h('div', { className: 'qqg-mono' }, '群 ' + (item.groupId || '') + ' · ' + fmtTime(item.seenAt))),
+                h('div', { style: { display: 'flex', gap: 6 } },
+                  h(Btn, { variant: 'primary', disabled: !!busy, onClick: function () { act(item, 'approve'); } }, '通过'),
+                  h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { act(item, 'decline'); } }, '拒绝')));
+            }))
+            : h(Empty, { text: '暂无待审批申请' })),
         h('div', { className: 'qqg-card' },
-          h('h4', null, '规则'),
-          h(Field, { label: '违规词（每行一个）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: listToLines(mod.keywords), onChange: function (e) { set('keywords', linesToList(e.target.value)); } })),
-          h(Field, { label: '正则规则（每行一个，需符合 JS 正则语法）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: listToLines(mod.regexes), onChange: function (e) { set('regexes', linesToList(e.target.value)); } })),
-          h(Check, { checked: mod.detectLinks, label: '检测可疑链接（域名白名单外）', onChange: function (v) { set('detectLinks', v); } }),
-          h(Field, { label: '链接白名单（每行一个域名）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: listToLines(mod.linkWhitelist), onChange: function (e) { set('linkWhitelist', linesToList(e.target.value)); } }))),
+          h('h4', null, '入群审批'),
+          h(Check, { checked: join.autoApprove, label: '关键词匹配自动通过', onChange: function (v) { set('autoApprove', v); } }),
+          h(Check, { checked: join.autoDeclineRisk, label: '风险账号自动拒绝', onChange: function (v) { set('autoDeclineRisk', v); } }),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '通过关键词（每行一个）', wide: true },
+              h(TextArea, { value: listToLines(join.approveKeywords), onChange: function (v) { set('approveKeywords', linesToList(v)); } })),
+            h(Field, { label: '拒绝关键词（每行一个）', wide: true },
+              h(TextArea, { value: listToLines(join.declineKeywords), onChange: function (v) { set('declineKeywords', linesToList(v)); } }))),
+          h(Field, { label: '拒绝理由', wide: true },
+            h(TextInput, { value: join.rejectReason || '', onChange: function (v) { set('rejectReason', v); } }))),
         h('div', { className: 'qqg-card' },
-          h('h4', null, '刷屏与升级处理'),
-          h(Check, { checked: getIn(mod, 'spam.enabled', true), label: '启用刷屏检测', onChange: function (v) { set('spam.enabled', v); } }),
+          h('h4', null, '入群欢迎'),
+          h(Check, { checked: join.welcome.enabled, label: '新成员入群时发送欢迎语', onChange: function (v) { set('welcome.enabled', v); } }),
+          h(Field, { label: '欢迎语模板（{user} 为 @新成员，{name} 为昵称，{group} 为群名）', wide: true },
+            h(TextArea, { value: join.welcome.template || '', onChange: function (v) { set('welcome.template', v); } })),
+          h(Field, { label: '欢迎语变体（每行一条；多条时按群+成员+日期固定随机）', wide: true },
+            h(TextArea, { value: listToLines(join.welcome.variants), onChange: function (v) { set('welcome.variants', linesToList(v)); } })),
+          h(Field, { label: '随机种子盐' },
+            h(TextInput, { value: join.welcome.seedSalt || '', onChange: function (v) { set('welcome.seedSalt', v); } }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '新成员观察期'),
+          h(Check, { checked: join.observation.enabled, label: '启用观察期', onChange: function (v) { set('observation.enabled', v); } }),
+          h(Check, { checked: join.observation.blockLinks, label: '观察期禁止链接', onChange: function (v) { set('observation.blockLinks', v); } }),
+          h(Check, { checked: join.observation.blockImages, label: '观察期禁止图片', onChange: function (v) { set('observation.blockImages', v); } }),
           h('div', { className: 'qqg-row' },
-            h(Field, { label: '统计窗口（秒）' }, h(NumberInput, { value: getIn(mod, 'spam.windowSec', 10), min: 1, max: 600, onChange: function (v) { set('spam.windowSec', v); } })),
-            h(Field, { label: '窗口内消息数' }, h(NumberInput, { value: getIn(mod, 'spam.maxMessages', 6), min: 2, max: 100, onChange: function (v) { set('spam.maxMessages', v); } }))),
-          h(Check, { checked: getIn(mod, 'escalation.enabled', true), label: '启用多次违规升级', onChange: function (v) { set('escalation.enabled', v); } }),
+            h(Field, { label: '观察时长（分钟，0=不限制）' }, h(NumberInput, { value: join.observation.minutes, min: 0, max: 1440, onChange: function (v) { set('observation.minutes', v); } })),
+            h(Field, { label: '观察期动作' }, h(Select, { value: join.observation.action, onChange: function (v) { set('observation.action', v); }, options: ACTION_OPTIONS })))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '入群答题', h('span', { className: 'qqg-sub' }, '入群后在群里提问，答对才算完成验证')),
+          h(Check, { checked: join.quiz.enabled, label: '启用入群答题', onChange: function (v) { set('quiz.enabled', v); } }),
+          h(Check, { checked: join.quiz.askBeforeWelcome, label: '答题通过后再发欢迎语', onChange: function (v) { set('quiz.askBeforeWelcome', v); } }),
           h('div', { className: 'qqg-row' },
-            h(Field, { label: '第几次违规升级' }, h(NumberInput, { value: getIn(mod, 'escalation.violations', 3), min: 1, max: 100, onChange: function (v) { set('escalation.violations', v); } })),
-            h(Field, { label: '统计窗口（小时）' }, h(NumberInput, { value: getIn(mod, 'escalation.windowHours', 24), min: 1, max: 720, onChange: function (v) { set('escalation.windowHours', v); } })),
-            h(Field, { label: '升级动作' },
-              h(Select, {
-                value: getIn(mod, 'escalation.action', 'kick'),
-                onChange: function (v) { set('escalation.action', v); },
-                options: [{ value: 'warn', label: '警告' }, { value: 'mute', label: '禁言' }, { value: 'kick', label: '移出群聊' }],
-              }))),
-          h(Field, { label: '豁免群 openid（每行一个，只记录不处置）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: listToLines(mod.exemptGroups), onChange: function (e) { set('exemptGroups', linesToList(e.target.value)); } }))),
+            h(Field, { label: '超时（秒）' }, h(NumberInput, { value: join.quiz.timeoutSec, min: 30, max: 3600, onChange: function (v) { set('quiz.timeoutSec', v); } })),
+            h(Field, { label: '最多答错次数' }, h(NumberInput, { value: join.quiz.maxAttempts, min: 1, max: 20, onChange: function (v) { set('quiz.maxAttempts', v); } })),
+            h(Field, { label: '失败动作' }, h(Select, { value: join.quiz.action, onChange: function (v) { set('quiz.action', v); }, options: ACTION_OPTIONS }))),
+          h(Field, { label: '题目（每行一条，格式：问题 | 答案；答案可用 / 分隔多个）', wide: true },
+            h(TextArea, {
+              value: (join.quiz.questions || []).map(function (x) { return x.q + ' | ' + x.a; }).join('\n'),
+              onChange: function (v) {
+                var list = String(v || '').split(/\r?\n/u).map(function (line) {
+                  var parts = line.split('|');
+                  var q = (parts[0] || '').trim();
+                  var a = (parts[1] || '').trim();
+                  return q && a ? { q: q, a: a } : null;
+                }).filter(Boolean);
+                set('quiz.questions', list);
+              },
+            }))),
         h('div', { style: { textAlign: 'right' } },
-          h(Btn, { variant: 'primary', disabled: saving, onClick: doSave }, saving ? '保存中…' : '保存防护设置')));
+          h(Btn, { variant: 'primary', disabled: saving, onClick: doSave }, saving ? '保存中…' : '保存入群设置')));
     }
 
     function AnnouncementsTab(props) {
       var boot = props.boot;
-      var listState = useState(null);
-      var items = listState[0];
-      var setItems = listState[1];
+      var items = boot.announcements || [];
       var formState = useState({ title: '', content: '', targets: [], publishAt: '', publishNow: false });
       var form = formState[0];
       var setForm = formState[1];
       var busyState = useState(false);
       var busy = busyState[0];
       var setBusy = busyState[1];
-
-      useEffect(function () { setItems(boot.announcements || []); }, [boot.announcements]);
-
       var groups = boot.groups || [];
 
-      async function reload() {
-        var r = await api('bootstrap');
-        if (r.ok) setItems(r.data.announcements || []);
-        props.refresh();
-      }
-
       async function submit() {
-        if (!form.content.trim()) return props.notify('公告内容不能为空', true);
+        if (!String(form.content || '').trim()) return props.notify('公告内容不能为空', true);
         setBusy(true);
         var input = {
           title: form.title,
@@ -485,7 +785,7 @@ window.__ModuleLoader__.load({
         var r = await api('announcements', { action: 'create', input: input });
         if (r.ok && form.publishNow) {
           var p = await api('announcements', { action: 'publish', id: r.data.id });
-          if (p.ok) props.notify('公告已发布到群：成功 ' + p.data.sent + '/' + p.data.total);
+          if (p.ok) props.notify('公告已发布：成功 ' + p.data.sent + '/' + p.data.total);
           else props.notify((p.error && p.error.message) || '发布失败', true);
         } else if (r.ok) {
           props.notify(form.publishAt ? '公告已定时' : '公告已保存为草稿');
@@ -494,7 +794,7 @@ window.__ModuleLoader__.load({
         }
         setForm({ title: '', content: '', targets: form.targets, publishAt: '', publishNow: false });
         setBusy(false);
-        await reload();
+        await props.reload();
       }
 
       async function act(action, id) {
@@ -502,8 +802,10 @@ window.__ModuleLoader__.load({
         var r = await api('announcements', { action: action, id: id });
         setBusy(false);
         if (r.ok) {
-          props.notify(action === 'publish' ? '发送完成：成功 ' + r.data.sent + '/' + r.data.total : '操作完成');
-          await reload();
+          props.notify(action === 'publish'
+            ? '发送完成：成功 ' + r.data.sent + '/' + r.data.total
+            : (action === 'pause' ? '已转为草稿' : '已删除'));
+          await props.reload();
         } else {
           props.notify((r.error && r.error.message) || '操作失败', true);
         }
@@ -528,9 +830,10 @@ window.__ModuleLoader__.load({
                 onChange: function (e) { setForm(Object.assign({}, form, { publishAt: e.target.value })); },
               }))),
           h(Field, { label: '正文', wide: true },
-            h('textarea', {
-              className: 'qqg-ta', value: form.content, placeholder: '写公告内容…',
-              onChange: function (e) { setForm(Object.assign({}, form, { content: e.target.value })); },
+            h(TextArea, {
+              value: form.content,
+              placeholder: '写公告内容…',
+              onChange: function (v) { setForm(Object.assign({}, form, { content: v })); },
             })),
           h('div', { className: 'qqg-field', style: { width: '100%' } },
             h('span', null, '目标群（可多选）'),
@@ -550,11 +853,11 @@ window.__ModuleLoader__.load({
             h(Btn, { variant: 'primary', disabled: busy, onClick: submit }, busy ? '处理中…' : '创建公告'))),
         h('div', { className: 'qqg-card' },
           h('h4', null, '公告列表'),
-          items && items.length
+          items.length
             ? h('div', { className: 'qqg-list' }, items.map(function (item) {
               var tone = item.status === 'done' ? 'ok' : item.status === 'failed' ? 'bad' : item.status === 'scheduled' ? 'warn' : 'off';
               var label = { draft: '草稿', scheduled: '已定时', sending: '发送中', done: '已完成', failed: '失败', partial_failed: '部分失败' }[item.status] || item.status;
-              var itemContent = String(item.content || '');
+              var content = String(item.content || '');
               var targets = Array.isArray(item.targets) ? item.targets : [];
               return h('div', { className: 'qqg-item', key: item.id },
                 h('div', { className: 'qqg-main' },
@@ -562,130 +865,28 @@ window.__ModuleLoader__.load({
                     h('b', null, item.title || '(无标题)'), ' ',
                     h('span', { className: 'qqg-pill', 'data-t': tone }, label), ' ',
                     h('span', { className: 'qqg-sub' }, targets.length + ' 个群 · ' + fmtTime(item.updatedAt))),
-                  h('div', { style: { margin: '6px 0', whiteSpace: 'pre-wrap' } }, itemContent.slice(0, 180) + (itemContent.length > 180 ? '…' : '')),
+                  h('div', { style: { margin: '6px 0', whiteSpace: 'pre-wrap' } }, content.slice(0, 180) + (content.length > 180 ? '…' : '')),
                   item.publishAt ? h('div', { className: 'qqg-mono' }, '定时：' + fmtTime(item.publishAt)) : null,
                   item.results && item.results.length
-                    ? h('div', { className: 'qqg-mono' }, item.results.map(function (r) { return (r.groupName || r.gid) + (r.ok ? ' ✓' : ' ✗'); }).join(' · '))
+                    ? h('div', { className: 'qqg-mono' }, item.results.map(function (x) { return (x.groupName || x.gid) + (x.ok ? ' ✓' : ' ✗'); }).join(' · '))
                     : null),
                 h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                   h(Btn, { variant: 'primary', disabled: busy, onClick: function () { act('publish', item.id); } }, '立即发布'),
-                  item.status === 'scheduled' ? h(Btn, { disabled: busy, onClick: function () { act('pause', item.id); } }, '暂停') : null,
+                  item.status === 'scheduled' ? h(Btn, { disabled: busy, onClick: function () { act('pause', item.id); } }, '转草稿') : null,
                   h(Btn, { variant: 'danger', disabled: busy, onClick: function () { act('delete', item.id); } }, '删除')));
             }))
             : h(Empty, { text: '还没有公告' })));
     }
 
-    function JoinTab(props) {
-      var boot = props.boot;
-      var settings = boot.settings;
-      var sState = useState(settings);
-      var draft = sState[0];
-      var setDraft = sState[1];
-      var pendingState = useState(boot.pending || []);
-      var pending = pendingState[0];
-      var setPending = pendingState[1];
-      var gidState = useState((boot.groups && boot.groups[0] && boot.groups[0].gid) || '');
-      var gid = gidState[0];
-      var setGid = gidState[1];
-      var busyState = useState('');
-      var busy = busyState[0];
-      var setBusy = busyState[1];
-      useEffect(function () { setDraft(settings); }, [settings]);
-      useEffect(function () { setPending(boot.pending || []); }, [boot.pending]);
-
-      function set(path, value) { setDraft(setIn(draft, path, value)); }
-      var join = draft.join || {};
-      var welcome = join.welcome || {};
-
-      async function doAction(item, action) {
-        setBusy(item.joinRequestId);
-        var r = await api('join', {
-          action: action, gid: item.groupId || item.group_id || item.groupId, uid: item.memberOpenid, jid: item.joinRequestId, reason: '',
-        });
-        setBusy('');
-        if (r.ok) {
-          props.notify(action === 'approve' ? '已通过' : '已拒绝');
-          setPending(pending.filter(function (x) {
-            return !(x.groupId === item.groupId && x.joinRequestId === item.joinRequestId);
-          }));
-          props.refresh();
-        } else {
-          props.notify((r.error && r.error.message) || '操作失败', true);
-        }
-      }
-
-      async function refreshRemote() {
-        if (!gid) return props.notify('先选择群', true);
-        setBusy('refresh');
-        var r = await api('join', { action: 'refresh', gid: gid });
-        setBusy('');
-        if (r.ok) {
-          props.notify('已同步官方待审批列表：新增 ' + r.data.count);
-          props.refresh();
-        } else {
-          props.notify((r.error && r.error.message) || '同步失败', true);
-        }
-      }
-
-      async function doSave() {
-        await props.save(draft);
-      }
-
-      return h('div', null,
-        h('div', { className: 'qqg-card' },
-          h('h4', null, '待审批'),
-          h('div', { className: 'qqg-row' },
-            h(Field, { label: '群' },
-              h(Select, {
-                value: gid,
-                onChange: setGid,
-                options: (boot.groups || []).map(function (g) { return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid }; }),
-                style: { minWidth: 260 },
-              })),
-            h(Btn, { disabled: busy === 'refresh', onClick: refreshRemote }, busy === 'refresh' ? '同步中…' : '从官方同步')),
-          pending.length
-            ? h('div', { className: 'qqg-list' }, pending.map(function (item, i) {
-              var key = (item.groupId || '') + '|' + (item.joinRequestId || i);
-              return h('div', { className: 'qqg-item', key: key },
-                h('div', { className: 'qqg-main' },
-                  h('div', null,
-                    h('b', null, item.username || '未知昵称'), ' ',
-                    h('span', { className: 'qqg-mono' }, item.memberOpenid || ''), ' ',
-                    item.riskTips ? h('span', { className: 'qqg-pill', 'data-t': 'bad' }, '风险') : null),
-                  h('div', { className: 'qqg-sub' }, '验证：' + (item.verifyMessage || item.verify_message || '-') + ' · 来源：' + (item.applySource || '-')),
-                  h('div', { className: 'qqg-mono' }, '群 ' + (item.groupId || '') + ' · ' + fmtTime(item.seenAt))),
-                h('div', { style: { display: 'flex', gap: 6 } },
-                  h(Btn, { variant: 'primary', disabled: !!busy, onClick: function () { doAction(item, 'approve'); } }, '通过'),
-                  h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { doAction(item, 'decline'); } }, '拒绝')));
-            }))
-            : h(Empty, { text: '暂无待审批申请' })),
-        h('div', { className: 'qqg-card' },
-          h('h4', null, '自动审批'),
-          h(Check, { checked: join.autoApprove, label: '自动通过（验证信息命中通过关键词，或未设置关键词）', onChange: function (v) { set('join.autoApprove', v); } }),
-          h(Check, { checked: join.autoDeclineRisk, label: '命中风险提示时自动拒绝', onChange: function (v) { set('join.autoDeclineRisk', v); } }),
-          h('div', { className: 'qqg-row' },
-            h(Field, { label: '通过关键词（每行一个）' }, h('textarea', { className: 'qqg-ta', value: listToLines(join.approveKeywords), onChange: function (e) { set('join.approveKeywords', linesToList(e.target.value)); } })),
-            h(Field, { label: '拒绝关键词（每行一个）' }, h('textarea', { className: 'qqg-ta', value: listToLines(join.declineKeywords), onChange: function (e) { set('join.declineKeywords', linesToList(e.target.value)); } })))),
-        h('div', { className: 'qqg-card' },
-          h('h4', null, '入群欢迎'),
-          h(Check, { checked: welcome.enabled, label: '新成员入群时发送欢迎语', onChange: function (v) { set('join.welcome.enabled', v); } }),
-          h(Field, { label: '欢迎语模板（{user} 为 @新成员，{name} 为昵称，{group} 为群名）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: welcome.template || '', onChange: function (e) { set('join.welcome.template', e.target.value); } })),
-          h(Field, { label: '欢迎语变体（每行一条；多条时按群+成员+日期固定随机）', wide: true },
-            h('textarea', { className: 'qqg-ta', value: listToLines(welcome.variants), onChange: function (e) { set('join.welcome.variants', linesToList(e.target.value)); } })),
-          h(Field, { label: '随机种子盐' }, h(TextInput, { value: welcome.seedSalt || '', onChange: function (v) { set('join.welcome.seedSalt', v); } }))),
-        h('div', { style: { textAlign: 'right' } }, h(Btn, { variant: 'primary', onClick: doSave }, '保存审批与欢迎设置')));
-    }
-
     function GroupsTab(props) {
       var boot = props.boot;
       var groups = boot.groups || [];
-      var addState = useState({ gid: '', name: '' });
-      var add = addState[0];
-      var setAdd = addState[1];
       var gidState = useState(groups[0] ? groups[0].gid : '');
       var gid = gidState[0];
       var setGid = gidState[1];
+      var addState = useState({ gid: '', name: '' });
+      var add = addState[0];
+      var setAdd = addState[1];
       var qState = useState('');
       var q = qState[0];
       var setQ = qState[1];
@@ -695,10 +896,24 @@ window.__ModuleLoader__.load({
       var busyState = useState('');
       var busy = busyState[0];
       var setBusy = busyState[1];
-
       useEffect(function () {
         if (!gid && groups[0]) setGid(groups[0].gid);
       }, [groups.length]);
+
+      var ovState = useState({ action: '', muteSeconds: '', obsMinutes: '', keywords: '', welcome: '', reset: false });
+      var ov = ovState[0];
+      var setOv = ovState[1];
+      useEffect(function () {
+        var base = (boot.settings.groups && boot.settings.groups[gid]) || {};
+        setOv({
+          action: getIn(base, 'moderation.action', ''),
+          muteSeconds: getIn(base, 'moderation.muteSeconds', '') === '' ? '' : String(getIn(base, 'moderation.muteSeconds', '')),
+          obsMinutes: getIn(base, 'join.observation.minutes', '') === '' ? '' : String(getIn(base, 'join.observation.minutes', '')),
+          keywords: listToLines(getIn(base, 'moderation.keywords', [])),
+          welcome: listToLines(getIn(base, 'join.welcome.variants', [])),
+          reset: false,
+        });
+      }, [gid, boot.settings]);
 
       async function search() {
         setBusy('search');
@@ -709,22 +924,22 @@ window.__ModuleLoader__.load({
       }
 
       async function addGroup() {
-        if (!add.gid.trim()) return props.notify('请填写群 openid', true);
+        if (!String(add.gid || '').trim()) return props.notify('请填写群 openid', true);
         setBusy('add');
         var r = await api('groups', { action: 'add', gid: add.gid.trim(), name: add.name.trim() });
         setBusy('');
         if (r.ok) {
-          props.notify('群已添加');
+          props.notify('群已登记');
           setAdd({ gid: '', name: '' });
-          props.refresh();
-        } else props.notify((r.error && r.error.message) || '添加失败', true);
+          props.reload();
+        } else props.notify((r.error && r.error.message) || '登记失败', true);
       }
 
       async function removeGroup(g) {
         setBusy(g.gid);
         var r = await api('groups', { action: 'remove', gid: g.gid });
         setBusy('');
-        if (r.ok) { props.notify('已移除群'); props.refresh(); }
+        if (r.ok) { props.notify('已移除登记'); props.reload(); }
         else props.notify((r.error && r.error.message) || '移除失败', true);
       }
 
@@ -738,15 +953,35 @@ window.__ModuleLoader__.load({
         else props.notify((r.error && r.error.message) || '操作失败', true);
       }
 
+      function saveOverride() {
+        if (!gid) return props.notify('先选择群', true);
+        if (ov.reset) return props.savePatch({ groups: { [gid]: null } });
+        var mod = {};
+        var join = {};
+        if (ov.action) mod.action = ov.action;
+        if (String(ov.muteSeconds) !== '') mod.muteSeconds = Number(ov.muteSeconds);
+        var words = linesToList(ov.keywords);
+        if (words.length) mod.keywords = words;
+        if (String(ov.obsMinutes) !== '') join.observation = { minutes: Number(ov.obsMinutes) };
+        var welcome = linesToList(ov.welcome);
+        if (welcome.length) join.welcome = { variants: welcome };
+        var entry = { __replace: true };
+        if (Object.keys(mod).length) entry.moderation = mod;
+        if (Object.keys(join).length) entry.join = join;
+        var patch = { groups: {} };
+        patch.groups[gid] = entry;
+        props.savePatch(patch);
+      }
+
       return h('div', null,
         h('div', { className: 'qqg-card' },
           h('h4', null, '群注册表'),
           h('div', { className: 'qqg-row' },
             h(Field, { label: '群 openid' }, h(TextInput, { value: add.gid, onChange: function (v) { setAdd(Object.assign({}, add, { gid: v })); } })),
             h(Field, { label: '群名称（可选）' }, h(TextInput, { value: add.name, onChange: function (v) { setAdd(Object.assign({}, add, { name: v })); } })),
-            h(Btn, { variant: 'primary', disabled: busy === 'add', onClick: addGroup }, '添加群')),
+            h(Btn, { variant: 'primary', disabled: busy === 'add', onClick: addGroup }, busy === 'add' ? '登记中…' : '登记群')),
           groups.length
-            ? h('table', { className: 'qqg-table' },
+            ? h('div', { className: 'qqg-table-wrap', style: { marginTop: 10 } }, h('table', { className: 'qqg-table' },
               h('thead', null, h('tr', null, h('th', null, '群'), h('th', null, 'openid'), h('th', null, '人数'), h('th', null, '最近活跃'), h('th', null, ''))),
               h('tbody', null, groups.map(function (g) {
                 return h('tr', { key: g.gid },
@@ -754,11 +989,44 @@ window.__ModuleLoader__.load({
                   h('td', { className: 'qqg-mono' }, g.gid),
                   h('td', null, g.memberCount ? String(g.memberCount) : '-'),
                   h('td', null, fmtTime(g.lastSeenAt)),
-                  h('td', null, h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { removeGroup(g); } }, '移除')));
-              })))
+                  h('td', null, h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { removeGroup(g); } }, '移除登记')));
+              }))))
             : h(Empty, { text: '还没有群。机器人收到群事件后会自动登记；也可以手动添加 openid。' })),
         h('div', { className: 'qqg-card' },
-          h('h4', null, '成员台账'),
+          h('h4', null, '按群覆盖设置', h('span', { className: 'qqg-sub' }, '留空 = 继承全局')),
+          h(Field, { label: '选择群' },
+            h(Select, {
+              value: gid, onChange: setGid,
+              options: groups.map(function (g) { return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid }; }),
+              style: { minWidth: 260 },
+            })),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '违规动作' },
+              h(Select, {
+                value: ov.action,
+                onChange: function (v) { setOv(Object.assign({}, ov, { action: v })); },
+                options: [{ value: '', label: '继承' }].concat(ACTION_OPTIONS),
+              })),
+            h(Field, { label: '禁言秒数' },
+              h(TextInput, {
+                value: ov.muteSeconds, placeholder: '继承',
+                onChange: function (v) { setOv(Object.assign({}, ov, { muteSeconds: v })); },
+              })),
+            h(Field, { label: '观察期分钟' },
+              h(TextInput, {
+                value: ov.obsMinutes, placeholder: '继承',
+                onChange: function (v) { setOv(Object.assign({}, ov, { obsMinutes: v })); },
+              }))),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '覆盖违规词（每行一个，留空继承）', wide: true },
+              h(TextArea, { value: ov.keywords, onChange: function (v) { setOv(Object.assign({}, ov, { keywords: v })); } })),
+            h(Field, { label: '覆盖欢迎语变体（每行一条，留空继承）', wide: true },
+              h(TextArea, { value: ov.welcome, onChange: function (v) { setOv(Object.assign({}, ov, { welcome: v })); } }))),
+          h(Check, { checked: ov.reset, label: '清除该群所有覆盖，恢复继承', onChange: function (v) { setOv(Object.assign({}, ov, { reset: v })); } }),
+          h('div', { style: { textAlign: 'right' } },
+            h(Btn, { variant: 'primary', onClick: saveOverride }, '保存该群设置'))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '成员查询与操作'),
           h('div', { className: 'qqg-row' },
             h(Field, { label: '群' },
               h(Select, {
@@ -770,7 +1038,7 @@ window.__ModuleLoader__.load({
             h(Btn, { disabled: busy === 'search', onClick: search }, busy === 'search' ? '查询中…' : '查询')),
           h('div', { className: 'qqg-note' }, '成员台账只记录机器人见过的成员（入群申请、群消息）。QQ 官方暂未开放“全量成员列表”接口。'),
           members.length
-            ? h('table', { className: 'qqg-table' },
+            ? h('div', { className: 'qqg-table-wrap' }, h('table', { className: 'qqg-table' },
               h('thead', null, h('tr', null, h('th', null, '昵称'), h('th', null, 'openid'), h('th', null, '最近活跃'), h('th', null, '操作'))),
               h('tbody', null, members.map(function (m) {
                 return h('tr', { key: m.gid + '|' + m.uid },
@@ -782,26 +1050,304 @@ window.__ModuleLoader__.load({
                       h(Btn, { disabled: !!busy, onClick: function () { memberAct('mute', m); } }, '禁言'),
                       h(Btn, { disabled: !!busy, onClick: function () { memberAct('unmute', m); } }, '解除'),
                       h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { memberAct('kick', m); } }, '移出'))));
-              })))
-            : h(Empty, { text: '没有匹配的成员' })));
+              }))))
+            : h(Empty, { text: '输入关键词后搜索' })));
+    }
+
+    function BlacklistTab(props) {
+      var boot = props.boot;
+      var groups = boot.groups || [];
+      var sState = useState({ gid: groups[0] ? groups[0].gid : '', uid: '', name: '', reason: '' });
+      var form = sState[0];
+      var setForm = sState[1];
+      var busyState = useState(false);
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      var items = boot.blacklist || [];
+
+      async function addItem() {
+        if (!form.gid || !form.uid.trim()) return props.notify('请填写群和成员 openid', true);
+        setBusy(true);
+        var r = await api('blacklist', {
+          action: 'add', gid: form.gid, uid: form.uid.trim(), name: form.name.trim(), reason: form.reason.trim(),
+        });
+        setBusy(false);
+        props.notify(r.ok ? '已加入黑名单' : ((r.error && r.error.message) || '操作失败'), !r.ok);
+        if (r.ok) {
+          setForm(Object.assign({}, form, { uid: '', name: '', reason: '' }));
+          props.reload();
+        }
+      }
+
+      async function removeItem(x) {
+        setBusy(true);
+        var r = await api('blacklist', { action: 'remove', gid: x.gid, uid: x.uid });
+        setBusy(false);
+        props.notify(r.ok ? '已移出黑名单' : ((r.error && r.error.message) || '操作失败'), !r.ok);
+        if (r.ok) props.reload();
+      }
+
+      return h('div', null,
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '黑名单', h('span', { className: 'qqg-sub' }, '被拒/累计违规的成员再次申请会自动拒绝')),
+          items.length
+            ? h('div', { className: 'qqg-list' }, items.map(function (x) {
+              return h('div', { className: 'qqg-item', key: x.gid + '|' + x.uid },
+                h('div', { className: 'qqg-main' },
+                  h('div', { style: { fontWeight: 600 } }, x.name || x.uid),
+                  h('div', { className: 'qqg-mono' }, x.gid + ' · ' + x.uid),
+                  h('div', { className: 'qqg-sub' }, (x.reason || '未填写原因') + ' · ' + fmtTime(x.at) + ' · ' + (x.by || ''))),
+                h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { removeItem(x); } }, '移出'));
+            }))
+            : h(Empty, { text: '黑名单为空' })),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '手动加入黑名单'),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '群' },
+              h(Select, {
+                value: form.gid,
+                onChange: function (v) { setForm(Object.assign({}, form, { gid: v })); },
+                options: groups.map(function (g) { return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid }; }),
+              })),
+            h(Field, { label: '成员 openid' }, h(TextInput, { value: form.uid, onChange: function (v) { setForm(Object.assign({}, form, { uid: v })); } })),
+            h(Field, { label: '昵称（可选）' }, h(TextInput, { value: form.name, onChange: function (v) { setForm(Object.assign({}, form, { name: v })); } }))),
+          h(Field, { label: '原因', wide: true }, h(TextInput, { value: form.reason, placeholder: '例如：多次发广告', onChange: function (v) { setForm(Object.assign({}, form, { reason: v })); } })),
+          h(Btn, { variant: 'primary', disabled: busy, onClick: addItem }, '加入黑名单')));
+    }
+
+    function AuditTab() {
+      var itemsState = useState([]);
+      var items = itemsState[0];
+      var setItems = itemsState[1];
+      var fState = useState({ kind: '', gid: '', uid: '' });
+      var f = fState[0];
+      var setF = fState[1];
+      var busyState = useState(false);
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+
+      async function load() {
+        setBusy(true);
+        var r = await api('audit?kind=' + encodeURIComponent(f.kind)
+          + '&groupId=' + encodeURIComponent(f.gid) + '&userId=' + encodeURIComponent(f.uid) + '&limit=300');
+        setBusy(false);
+        if (r.ok) setItems(r.data.items || []);
+      }
+      useEffect(function () { void load(); }, []);
+
+      function exportCsv() {
+        var head = '时间,类型,群,成员,动作,详情,结果\n';
+        var body = items.map(function (x) {
+          return [x.at, x.kind, x.groupName || x.groupId, x.userName || x.userId, x.action, x.detail, x.ok ? '成功' : '失败']
+            .map(csvCell).join(',');
+        }).join('\n');
+        download('qqbot-guard-audit.csv', head + body);
+      }
+
+      return h('div', null,
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '审计日志'),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '类型' },
+              h(Select, {
+                value: f.kind,
+                onChange: function (v) { setF(Object.assign({}, f, { kind: v })); },
+                options: [{ value: '', label: '全部类型' }].concat(['moderation', 'join', 'announce', 'command', 'config'].map(function (x) {
+                  return { value: x, label: x };
+                })),
+              })),
+            h(Field, { label: '群 openid' }, h(TextInput, { value: f.gid, onChange: function (v) { setF(Object.assign({}, f, { gid: v })); } })),
+            h(Field, { label: '成员 openid' }, h(TextInput, { value: f.uid, onChange: function (v) { setF(Object.assign({}, f, { uid: v })); } })),
+            h(Btn, { disabled: busy, onClick: function () { void load(); } }, busy ? '查询中…' : '查询'),
+            h(Btn, { onClick: exportCsv }, '导出 CSV')),
+          items.length
+            ? h('div', { className: 'qqg-table-wrap', style: { marginTop: 10 } }, h('table', { className: 'qqg-table' },
+              h('thead', null, h('tr', null, h('th', null, '时间'), h('th', null, '类型'), h('th', null, '群'), h('th', null, '成员'), h('th', null, '动作'), h('th', null, '详情'), h('th', null, '结果'))),
+              h('tbody', null, items.map(function (x, i) {
+                return h('tr', { key: i },
+                  h('td', null, fmtTime(x.at)),
+                  h('td', null, x.kind),
+                  h('td', { className: 'qqg-mono' }, x.groupName || x.groupId || '-'),
+                  h('td', { className: 'qqg-mono' }, x.userName || x.userId || '-'),
+                  h('td', null, x.action),
+                  h('td', null, x.detail || ''),
+                  h('td', null, h('span', { className: 'qqg-pill', 'data-t': x.ok ? 'ok' : 'bad' }, x.ok ? '成功' : '失败')));
+              }))))
+            : h(Empty, { text: '没有记录' })));
+    }
+
+    var CHANGE_ACTION_LABEL = { update: '保存设置', password: '修改密码', import: '导入配置' };
+
+    function ChangelogTab() {
+      var itemsState = useState([]);
+      var items = itemsState[0];
+      var setItems = itemsState[1];
+      var kState = useState('');
+      var keyword = kState[0];
+      var setKeyword = kState[1];
+      var busyState = useState(false);
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+
+      async function load() {
+        setBusy(true);
+        var r = await api('changelog?keyword=' + encodeURIComponent(keyword));
+        setBusy(false);
+        if (r.ok) setItems(r.data.items || []);
+      }
+      useEffect(function () { void load(); }, []);
+
+      function exportCsv() {
+        var head = '时间,操作者,来源IP,操作,变更内容,结果\n';
+        var body = items.map(function (x) {
+          return [x.at, x.userName, x.userId, CHANGE_ACTION_LABEL[x.action] || x.action, x.detail, x.ok ? '成功' : '失败']
+            .map(csvCell).join(',');
+        }).join('\n');
+        download('qqbot-guard-changelog.csv', head + body);
+      }
+
+      return h('div', { className: 'qqg-card' },
+        h('h4', null, '修改日志', h('span', { className: 'qqg-sub' }, '设置保存 / 密码修改 / 配置导入')),
+        h('div', { className: 'qqg-row' },
+          h('div', { style: { flex: 1, minWidth: 200 } },
+            h(TextInput, { value: keyword, placeholder: '搜索操作者、来源 IP 或变更内容', onChange: setKeyword })),
+          h(Btn, { disabled: busy, onClick: function () { void load(); } }, busy ? '查询中…' : '查询'),
+          h(Btn, { onClick: exportCsv }, '导出 CSV')),
+        h('p', { className: 'qqg-hint' }, '按时间倒序显示最近的修改记录，包含操作者、来源 IP 与变更摘要。'),
+        items.length
+          ? h('div', { className: 'qqg-table-wrap', style: { marginTop: 10 } }, h('table', { className: 'qqg-table' },
+            h('thead', null, h('tr', null, h('th', null, '时间'), h('th', null, '操作者'), h('th', null, '来源 IP'), h('th', null, '操作'), h('th', null, '变更内容'), h('th', null, '结果'))),
+            h('tbody', null, items.map(function (x, i) {
+              return h('tr', { key: i },
+                h('td', null, fmtTime(x.at)),
+                h('td', null, x.userName || '-'),
+                h('td', { className: 'qqg-mono' }, x.userId || '-'),
+                h('td', null, CHANGE_ACTION_LABEL[x.action] || x.action),
+                h('td', null, x.detail || ''),
+                h('td', null, h('span', { className: 'qqg-pill', 'data-t': x.ok ? 'ok' : 'bad' }, x.ok ? '成功' : '失败')));
+            }))))
+          : h(Empty, { text: '暂无修改记录' }));
     }
 
     function SettingsTab(props) {
-      var settings = props.boot && props.boot.settings;
-      var compat = props.boot && props.boot.compat;
-      var sState = useState(settings || {});
+      var boot = props.boot;
+      var sState = useState(boot.settings || {});
       var draft = sState[0];
       var setDraft = sState[1];
       var savingState = useState(false);
       var saving = savingState[0];
       var setSaving = savingState[1];
+      var secretState = useState('');
+      var secret = secretState[0];
+      var setSecret = secretState[1];
+      var verifyState = useState(null);
+      var verify = verifyState[0];
+      var setVerify = verifyState[1];
+      var pwdState = useState({ target: 'operator', current: '', next: '' });
+      var pwd = pwdState[0];
+      var setPwd = pwdState[1];
       var netState = useState(null);
       var net = netState[0];
       var setNet = netState[1];
       var netBusyState = useState(false);
       var netBusy = netBusyState[0];
       var setNetBusy = netBusyState[1];
-      useEffect(function () { setDraft(settings || {}); }, [settings]);
+      useEffect(function () { setDraft(boot.settings || {}); }, [boot.settings]);
+
+      function set(path, value) { setDraft(setIn(draft, path, value)); }
+
+      async function verifyNotify(silent) {
+        var name = String(draft.panel.notifyName || '').trim();
+        var uid = String(draft.panel.notifyOpenid || '').trim();
+        if (!name || !uid) {
+          setVerify({ matched: false, reason: '两项都填写后才能验证' });
+          if (!silent) props.notify('两项都填写后才能验证', true);
+          return null;
+        }
+        var r = await api('notify/verify', { name: name, uid: uid });
+        if (!r.ok) {
+          setVerify({ matched: false, reason: (r.error && r.error.message) || '验证失败' });
+          if (!silent) props.notify((r.error && r.error.message) || '验证失败', true);
+          return null;
+        }
+        setVerify(r.data);
+        if (!silent) props.notify(r.data.matched ? '通知对象验证通过' : (r.data.reason || '通知对象未匹配'), !r.data.matched);
+        return r.data;
+      }
+
+      async function save() {
+        var name = String(draft.panel.notifyName || '').trim();
+        var uid = String(draft.panel.notifyOpenid || '').trim();
+        if ((name && !uid) || (!name && uid)) return props.notify('通知对象的昵称和 QQ 号必须同时填写', true);
+        var pendingVerify = false;
+        if (name && uid) {
+          var v = await verifyNotify(true);
+          if (v && v.matched === false && v.definite) {
+            return props.notify(v.reason || '通知对象昵称与 openid 不匹配，已阻止保存', true);
+          }
+          pendingVerify = !!(v && v.matched === false);
+        }
+        var patch = {
+          appId: draft.appId,
+          autoConnect: draft.autoConnect,
+          watchJoinRequests: draft.watchJoinRequests,
+          panel: draft.panel,
+          commands: draft.commands,
+        };
+        if (secret.trim()) patch.appSecret = secret.trim();
+        setSaving(true);
+        var okSaved = await props.savePatch(patch);
+        setSaving(false);
+        if (okSaved) {
+          setSecret('');
+          if (pendingVerify) props.notify('已保存；通知对象暂未校验（机器人未连接或无台账记录）');
+        }
+      }
+
+      async function changePassword() {
+        var min = Number((boot.security && boot.security.passwordMin) || 0);
+        var max = Number((boot.security && boot.security.passwordMax) || 0);
+        var text = String(pwd.next || '');
+        if (min && text.length < min) return props.notify('新密码至少 ' + min + ' 位', true);
+        if (max && text.length > max) return props.notify('新密码最多 ' + max + ' 位', true);
+        if (!/[A-Za-z]/u.test(text) || !/\d/u.test(text)) return props.notify('新密码必须同时包含字母和数字', true);
+        setSaving(true);
+        var r = await api('security/password', {
+          target: pwd.target, currentPassword: pwd.current, newPassword: text,
+        });
+        setSaving(false);
+        if (!r.ok) return props.notify((r.error && r.error.message) || '修改失败', true);
+        setPwd({ target: pwd.target, current: '', next: '' });
+        props.notify('密码已修改');
+      }
+
+      async function exportConfig() {
+        var r = await api('config/export?secrets=0');
+        if (!r.ok) return props.notify((r.error && r.error.message) || '导出失败', true);
+        download('qqbot-guard-config.json', JSON.stringify(r.data, null, 2));
+        props.notify('配置已导出');
+      }
+
+      function importConfig() {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json,.json';
+        input.addEventListener('change', async function () {
+          var file = input.files && input.files[0];
+          if (!file) return;
+          var data;
+          try {
+            data = JSON.parse(await file.text());
+          } catch (e) {
+            return props.notify('文件不是合法 JSON', true);
+          }
+          var r = await api('config/import', { data: data });
+          if (!r.ok) return props.notify((r.error && r.error.message) || '导入失败', true);
+          props.notify('导入完成');
+          await props.reload();
+        });
+        input.click();
+      }
 
       async function checkNetwork() {
         setNetBusy(true);
@@ -811,31 +1357,98 @@ window.__ModuleLoader__.load({
         else setNet({ ok: false, results: [{ name: '检测失败', ok: false, error: (r.error && r.error.message) || '未知错误' }] });
       }
 
-      function set(path, value) { setDraft(setIn(draft, path, value)); }
-      async function save() {
-        setSaving(true);
-        await props.save(draft);
-        setSaving(false);
+      var compat = boot.compat;
+      var panel = boot.panel || {};
+      var sec = boot.security || {};
+      var pwdRule = sec.passwordMin
+        ? '新密码至少 ' + sec.passwordMin + ' 位，必须同时包含字母和数字，且不能与另一个角色的密码相同。'
+        : '新密码必须同时包含字母和数字，且不能与另一个角色的密码相同。';
+      var verifyText = '';
+      var verifyTone = 'off';
+      if (verify) {
+        if (verify.matched) {
+          verifyText = '已匹配：' + verify.nickname + '（' + (verify.source === 'api' ? '官方昵称校验' : '成员台账') + '）';
+          verifyTone = 'ok';
+        } else {
+          verifyText = verify.reason || '未匹配';
+          verifyTone = 'bad';
+        }
       }
 
       return h('div', null,
         h('div', { className: 'qqg-card' },
           h('h4', null, '机器人凭据'),
           h('div', { className: 'qqg-row' },
-            h(Field, { label: 'AppID' }, h(TextInput, { value: draft.appId, onChange: function (v) { set('appId', v); } })),
+            h(Field, { label: 'AppID' }, h(TextInput, { value: draft.appId || '', onChange: function (v) { set('appId', v); } })),
             h(Field, { label: 'AppSecret', hint: '留空或保持掩码表示不修改' },
               h(TextInput, {
-                value: draft.appSecret === '••••••••' ? '' : draft.appSecret,
+                value: secret,
                 placeholder: draft.secretSet ? '已设置（留空不修改）' : '填写 AppSecret',
                 type: 'password',
-                onChange: function (v) { set('appSecret', v); },
+                onChange: setSecret,
               }))),
           h(Check, { checked: draft.autoConnect, label: '启动时自动连接 QQ', onChange: function (v) { set('autoConnect', v); } }),
           h(Check, { checked: draft.watchJoinRequests, label: '订阅入群申请事件（需要平台授权 GROUP_MEMBER_EVENT）', onChange: function (v) { set('watchJoinRequests', v); } }),
-          h('div', { className: 'qqg-note' },
-            '机器人需要在 QQ 开放平台开通「群管理员」相关权限（入群审批、禁言、移除成员），并把机器人设为群管理员。',
-            ' 本插件不连接任何 AI 模型，也不处理聊天、表情包、图片或语音。'),
-          h('div', { style: { textAlign: 'right' } }, h(Btn, { variant: 'primary', disabled: saving, onClick: save }, saving ? '保存中…' : '保存并重连'))),
+          h('div', { className: 'qqg-note' }, '机器人需要在 QQ 开放平台开通「群管理员」相关权限（入群审批、禁言、移除成员），并把机器人设为群管理员。本插件不连接任何 AI 模型，也不处理聊天、表情包、图片或语音。')),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '变更通知对象', h('span', { className: 'qqg-sub' }, '仅普通管理员修改时 @')),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '通知对象昵称（必填）' },
+              h(TextInput, {
+                value: draft.panel.notifyName || '',
+                placeholder: '例如：群主昵称',
+                onChange: function (v) { set('panel.notifyName', v); setVerify(null); },
+              })),
+            h(Field, { label: '对应 QQ 号 / openid（必填）' },
+              h(TextInput, {
+                value: draft.panel.notifyOpenid || '',
+                placeholder: '与昵称必须属于同一位成员',
+                onChange: function (v) { set('panel.notifyOpenid', v); setVerify(null); },
+              }))),
+          h('div', { className: 'qqg-row', style: { marginTop: 2 } },
+            h(Btn, { onClick: function () { void verifyNotify(false); } }, '验证通知对象'),
+            verifyText ? h('span', { className: 'qqg-pill', 'data-t': verifyTone }, verifyText) : null),
+          h('p', { className: 'qqg-hint' }, '昵称和 QQ 号（openid）必须同时匹配同一位成员才会 @ 他；任一不匹配就只发日志、不 @。@ 仅在普通管理员修改机器人级设置时生效。')),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '局域网面板'),
+          h('div', { className: 'qqg-row' },
+            h(Check, { checked: draft.panel.enabled, label: '启用面板', onChange: function (v) { set('panel.enabled', v); } }),
+            h(Field, { label: '监听地址' }, h(TextInput, { value: draft.panel.host || '', onChange: function (v) { set('panel.host', v); } })),
+            h(Field, { label: '端口' }, h(NumberInput, { value: draft.panel.port, min: 0, max: 65535, onChange: function (v) { set('panel.port', v); } }))),
+          h('p', { className: 'qqg-hint' }, '当前地址：' + ((panel.urls || []).join(' · ') || '未启动') + '。修改监听地址或端口后保存会自动重启面板。')),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '群内管理员指令'),
+          h('div', { className: 'qqg-row' },
+            h(Check, { checked: draft.commands.enabled, label: '启用指令', onChange: function (v) { set('commands.enabled', v); } }),
+            h(Field, { label: '前缀' }, h(TextInput, { value: draft.commands.prefix || '/', onChange: function (v) { set('commands.prefix', v); }, style: { width: 80 } }))),
+          h(Field, { label: '允许使用的成员 openid（每行一个；信任成员自动允许）', wide: true },
+            h(TextArea, { value: listToLines(draft.commands.allowUsers), onChange: function (v) { set('commands.allowUsers', linesToList(v)); } })),
+          h(Field, { label: '群规文本（/rule 返回）', wide: true },
+            h(TextArea, { value: draft.commands.ruleText || '', onChange: function (v) { set('commands.ruleText', v); } }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '安全'),
+          h('dl', { className: 'qqg-kv' },
+            h('dt', null, '当前角色'), h('dd', null, boot.me && boot.me.role === 'admin' ? '最高管理员（全部权限）' : '普通管理员'),
+            h('dt', null, '面板密码'), h('dd', null, sec.initialized ? '已设置，可在下方修改' : '尚未设置')),
+          h('div', { className: 'qqg-row', style: { marginTop: 12 } },
+            h(Field, { label: '要修改的密码' },
+              h(Select, {
+                value: pwd.target,
+                onChange: function (v) { setPwd(Object.assign({}, pwd, { target: v })); },
+                options: [{ value: 'admin', label: '最高管理员' }, { value: 'operator', label: '普通管理员' }],
+              })),
+            h(Field, { label: '当前最高管理员密码' },
+              h(TextInput, { value: pwd.current, type: 'password', onChange: function (v) { setPwd(Object.assign({}, pwd, { current: v })); } })),
+            h(Field, { label: '新密码' },
+              h(TextInput, { value: pwd.next, type: 'password', onChange: function (v) { setPwd(Object.assign({}, pwd, { next: v })); } }))),
+          h(Btn, { disabled: saving, onClick: changePassword }, '修改密码'),
+          h('p', { className: 'qqg-hint' }, pwdRule)),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '配置备份与恢复'),
+          h('div', { className: 'qqg-row' },
+            h(Btn, { onClick: exportConfig }, '导出配置 JSON'),
+            h(Btn, { variant: 'danger', onClick: importConfig }, '导入配置')),
+          h('p', { className: 'qqg-hint' }, '导出的文件包含词表、按群配置、公告、黑名单；默认不含 AppSecret。')),
         h('div', { className: 'qqg-card' },
           h('h4', null, '兼容性自检'),
           compat
@@ -861,8 +1474,10 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'qqg-sub' }, '兼容性数据不可用')),
         h('div', { className: 'qqg-card' },
           h('h4', null, '运行信息'),
-          h('div', { className: 'qqg-mono' }, '数据目录：' + (props.boot && props.boot.dataDir ? props.boot.dataDir : '')),
-          h('div', { className: 'qqg-mono' }, '版本：' + (props.boot && props.boot.version ? props.boot.version : '') + ' · 无 AI 依赖')));
+          h('div', { className: 'qqg-mono' }, '数据目录：' + (boot.dataDir || '')),
+          h('div', { className: 'qqg-mono' }, '版本：' + (boot.version || '') + ' · 无 AI 依赖')),
+        h('div', { style: { textAlign: 'right' } },
+          h(Btn, { variant: 'primary', disabled: saving, onClick: save }, saving ? '保存中…' : '保存设置')));
     }
 
     function apply(ctx) {

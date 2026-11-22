@@ -14,6 +14,7 @@ const state = {
   changelog: [],
   groupSel: '',
   memberQuery: '',
+  net: null,
   poll: null,
 };
 
@@ -1090,6 +1091,8 @@ function renderSettings(el) {
   const ro = false;
   const panel = state.boot.panel || {};
   const sec = state.security || {};
+  const compat = state.boot.compat || {};
+  const net = state.net;
   const pwdRule = sec.passwordMin
     ? `新密码至少 ${sec.passwordMin} 位，必须同时包含字母和数字，且不能与另一个角色的密码相同。`
     : '新密码必须同时包含字母和数字，且不能与另一个角色的密码相同。';
@@ -1111,6 +1114,10 @@ function renderSettings(el) {
       <div class="grid cols-2">
         <label class="field"><span>通知对象昵称（必填）</span><input id="s-notify-name" value="${esc(s.panel.notifyName)}" placeholder="例如：群主昵称" ${disabledAttr(ro)}></label>
         <label class="field"><span>对应 QQ 号 / openid（必填）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="与昵称必须属于同一位成员" ${disabledAttr(ro)}></label>
+      </div>
+      <div class="row" style="margin-top:2px">
+        <button id="s-notify-check" class="btn">验证通知对象</button>
+        <span id="s-notify-result" class="hint"></span>
       </div>
       <p class="hint">昵称和 QQ 号（openid）必须同时匹配同一位成员才会 @ 他；任一不匹配就只发日志、不 @。@ 仅在普通管理员修改机器人级设置时生效。</p>
     </div>
@@ -1162,11 +1169,63 @@ function renderSettings(el) {
       <p class="hint">导出的文件包含词表、按群配置、公告、黑名单；默认不含 AppSecret。</p>
     </div>
 
+    <div class="card">
+      <h3>兼容性自检</h3>
+      <div class="hint">Node ${esc(compat.node || '-')} · ${esc(compat.platform || '-')}/${esc(compat.arch || '-')} · 内核/系统 ${esc(compat.release || '-')}</div>
+      <div class="list" style="margin-top:10px">
+        ${(compat.checks || []).map((c) => {
+          const tone = c.ok ? 'ok' : (c.level === 'required' ? 'bad' : 'warn');
+          const text = c.ok ? '通过' : (c.level === 'required' ? '不通过' : '注意');
+          return `<div class="item"><div class="main"><div class="title"><span class="pill ${tone}">${text}</span> ${esc(c.label)}</div>
+            <div class="meta">${esc(c.detail)}</div>${(!c.ok && c.hint) ? `<div class="meta" style="color:var(--warn)">${esc(c.hint)}</div>` : ''}</div></div>`;
+        }).join('') || '<div class="empty">兼容性数据不可用</div>'}
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="compat-net" class="btn">网络连通性检测</button>
+        ${net ? `<span class="pill ${net.ok ? 'ok' : 'bad'}">${net.ok ? 'QQ 接口可达' : '网络不可达'}</span>` : ''}
+      </div>
+      ${net && net.results ? `<div class="mono" style="margin-top:6px">${net.results.map((x) => esc(x.name + (x.ok ? ` 可达（HTTP ${x.status}）` : ` 失败：${x.error || ''}`))).join(' · ')}</div>` : ''}
+    </div>
+
+    <div class="card">
+      <h3>运行信息</h3>
+      <div class="mono">数据目录：${esc(state.boot.dataDir || '')}</div>
+      <div class="mono">版本：${esc(state.boot.version || '')} · 无 AI 依赖</div>
+    </div>
+
     <div class="row" style="margin-top:14px">
       <button id="s-save" class="btn primary">保存设置</button>
     </div>`;
 
-  $('s-save').addEventListener('click', () => {
+  const verifyNotify = async (silent) => {
+    const name = $('s-notify-name').value.trim();
+    const uid = $('s-notify-uid').value.trim();
+    const out = $('s-notify-result');
+    if (!name || !uid) {
+      out.textContent = '两项都填写后才能验证';
+      out.style.color = 'var(--warn)';
+      return null;
+    }
+    const r = await req('/notify/verify', { method: 'POST', body: { name, uid } });
+    if (!r.ok) {
+      out.textContent = r.error?.message || '验证失败';
+      out.style.color = 'var(--warn)';
+      return null;
+    }
+    const d = r.data || {};
+    if (d.matched) {
+      out.textContent = `已匹配：${d.nickname}（${d.source === 'api' ? '官方昵称校验' : '成员台账'}）`;
+      out.style.color = 'var(--ok)';
+    } else {
+      out.textContent = d.reason || '未匹配';
+      out.style.color = 'var(--bad)';
+    }
+    if (!silent) toast(d.matched ? '通知对象验证通过' : (d.reason || '通知对象未匹配'), !d.matched);
+    return d;
+  };
+  $('s-notify-check').addEventListener('click', () => { void verifyNotify(false); });
+
+  $('s-save').addEventListener('click', async () => {
     s.appId = $('s-appid').value.trim();
     const secret = $('s-secret').value;
     if (secret) s.appSecret = secret;
@@ -1180,13 +1239,22 @@ function renderSettings(el) {
     if ((notifyName && !notifyUid) || (!notifyName && notifyUid)) {
       return toast('通知对象的昵称和 QQ 号必须同时填写', true);
     }
+    var pendingVerify = false;
+    if (notifyName && notifyUid) {
+      const verified = await verifyNotify(true);
+      if (verified && verified.matched === false && verified.definite) {
+        return toast(verified.reason || '通知对象昵称与 openid 不匹配，已阻止保存', true);
+      }
+      pendingVerify = !!(verified && verified.matched === false);
+    }
     s.panel.notifyName = notifyName;
     s.panel.notifyOpenid = notifyUid;
     s.commands.enabled = $('s-cmd').checked;
     s.commands.prefix = $('s-cmd-prefix').value.trim() || '/';
     s.commands.allowUsers = parseLines($('s-cmd-users').value);
     s.commands.ruleText = $('s-rule').value;
-    savePatch(sectionPatch(['appId', 'appSecret', 'autoConnect', 'watchJoinRequests', 'panel', 'commands']));
+    await savePatch(sectionPatch(['appId', 'appSecret', 'autoConnect', 'watchJoinRequests', 'panel', 'commands']));
+    if (pendingVerify) toast('已保存；通知对象暂未校验（机器人未连接或无台账记录）', false);
   });
 
   if (admin()) {
@@ -1240,6 +1308,14 @@ function renderSettings(el) {
       input.click();
     });
   }
+
+  $('compat-net').addEventListener('click', async () => {
+    const r = await req('/compat?network=1');
+    state.net = r.ok
+      ? (r.data.network || null)
+      : { ok: false, results: [{ name: '检测失败', ok: false, error: r.error?.message || '未知错误' }] };
+    renderSettings(el);
+  });
 }
 
 function download(name, text) {
