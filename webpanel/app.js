@@ -1031,12 +1031,12 @@ function renderSettings(el) {
     </div>
 
     <div class="card">
-      <h3>变更通知对象 <span class="sub">由部署方自行设置</span></h3>
+      <h3>变更通知对象 <span class="sub">仅普通管理员修改时 @</span></h3>
       <div class="grid cols-2">
-        <label class="field"><span>通知对象昵称（可选）</span><input id="s-notify-name" value="${esc(s.panel.notifyName)}" placeholder="例如：群主昵称" ${disabledAttr(ro)}></label>
-        <label class="field"><span>通知对象 openid（推荐，优先使用）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="填写后不再按昵称匹配" ${disabledAttr(ro)}></label>
+        <label class="field"><span>通知对象昵称（必填）</span><input id="s-notify-name" value="${esc(s.panel.notifyName)}" placeholder="例如：群主昵称" ${disabledAttr(ro)}></label>
+        <label class="field"><span>对应 QQ 号 / openid（必填）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="与昵称必须属于同一位成员" ${disabledAttr(ro)}></label>
       </div>
-      <p class="hint">修改机器人级设置后会向所有已登记群发送变更日志。这里留空则只发日志、不 @ 任何人；昵称需要该成员在群里发过言才能匹配，openid 最可靠。</p>
+      <p class="hint">昵称和 QQ 号（openid）必须同时匹配同一位成员才会 @ 他；任一不匹配就只发日志、不 @。@ 仅在普通管理员修改机器人级设置时生效。</p>
     </div>
 
     <div class="card">
@@ -1099,8 +1099,13 @@ function renderSettings(el) {
     s.panel.enabled = $('s-panel').checked;
     s.panel.host = $('s-host').value.trim();
     s.panel.port = Number($('s-port').value);
-    s.panel.notifyName = $('s-notify-name').value.trim();
-    s.panel.notifyOpenid = $('s-notify-uid').value.trim();
+    const notifyName = $('s-notify-name').value.trim();
+    const notifyUid = $('s-notify-uid').value.trim();
+    if ((notifyName && !notifyUid) || (!notifyName && notifyUid)) {
+      return toast('通知对象的昵称和 QQ 号必须同时填写', true);
+    }
+    s.panel.notifyName = notifyName;
+    s.panel.notifyOpenid = notifyUid;
     s.commands.enabled = $('s-cmd').checked;
     s.commands.prefix = $('s-cmd-prefix').value.trim() || '/';
     s.commands.allowUsers = parseLines($('s-cmd-users').value);

@@ -238,3 +238,17 @@ test('基础补丁判断：词与欢迎语可改，其余不可', () => {
   assert.equal(isBasicPatch({ moderation: { action: 'kick' } }), false);
   assert.equal(isBasicPatch({ groups: { g1: { join: { quiz: { enabled: true } } } } }), false);
 });
+
+test('通知对象必须昵称与 QQ 号同时匹配', () => {
+  const { store, cleanup } = makeStore();
+  store.upsertMember('g1', 'u1', { name: '群主' });
+  assert.equal(store.findMemberByUidAndName('g1', 'u1', '群主')?.uid, 'u1');
+  // 昵称匹配但号码不匹配
+  assert.equal(store.findMemberByUidAndName('g1', 'u2', '群主'), null);
+  // 号码匹配但昵称不匹配
+  assert.equal(store.findMemberByUidAndName('g1', 'u1', '别人'), null);
+  // 缺少任一项都不匹配
+  assert.equal(store.findMemberByUidAndName('g1', '', '群主'), null);
+  assert.equal(store.findMemberByUidAndName('g1', 'u1', ''), null);
+  cleanup();
+});

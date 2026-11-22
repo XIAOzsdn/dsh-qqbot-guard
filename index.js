@@ -157,6 +157,8 @@ function createRuntime(ctx, config, logger) {
     if (!groups.length) return { queued: false, reason: '还没有已加入的群' };
     const settings = store.settings;
     const roleLabel = info?.role === 'admin' ? '最高管理员' : '普通管理员';
+    const notifyName = String(settings.panel.notifyName || '').trim();
+    const notifyUid = String(settings.panel.notifyOpenid || '').trim();
     const lines = [
       '【设置变更通知】',
       `操作者：${roleLabel}`,
@@ -167,14 +169,16 @@ function createRuntime(ctx, config, logger) {
     void (async () => {
       for (const gid of groups) {
         try {
-          let target = String(settings.panel.notifyOpenid || '').trim();
-          if (!target) target = store.findMemberByName(gid, settings.panel.notifyName)?.uid || '';
+          // @ 仅对普通管理员生效；昵称与 openid 必须同时匹配同一位成员
+          const target = info?.role === 'operator' && notifyName && notifyUid
+            ? (store.findMemberByUidAndName(gid, notifyUid, notifyName)?.uid || '')
+            : '';
           const text = (target ? `<@${target}> ` : '') + lines;
           const r = await client.sendGroupText(gid, text);
           store.appendAudit({
             kind: 'config', action: 'notify', groupId: gid,
             groupName: store.state.groups[gid]?.name || '',
-            userId: target, userName: target ? settings.panel.notifyName : '',
+            userId: target, userName: target ? notifyName : '',
             detail: r.ok ? '已发送设置变更通知' : `通知发送失败：${r.err?.human || ''}`,
             ok: r.ok, code: r.ok ? '' : r.err?.code || '', confidence: 1,
           });
@@ -183,7 +187,7 @@ function createRuntime(ctx, config, logger) {
         }
       }
     })();
-    return { queued: true, groups: groups.length, notifyName: settings.panel.notifyName };
+    return { queued: true, groups: groups.length, notifyName };
   };
 
   const compat = checkCompat({ dataDir });
