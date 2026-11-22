@@ -1,0 +1,66 @@
+{
+  "name": "dsh-qqbot-guard",
+  "version": "1.0.1",
+  "description": "QQ 群管理插件：违规防护、入群审批、入群欢迎、公告发布与管理。无 AI 对话、无表情包。",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "scripts/validate.mjs",
+    "scripts/doctor.mjs",
+    "test"
+  ],
+  "os": [
+    "win32",
+    "linux",
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    },
+    "engines": {
+      "dsh": ">=0.2.0-rc.2"
+    },
+    "manifestVersion": 1
+  },
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "@tencent-connect/qqbot-nodejs": "^1.0.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "license": "MIT"
+}
