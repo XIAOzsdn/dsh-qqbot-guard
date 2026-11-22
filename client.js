@@ -693,8 +693,13 @@ window.__ModuleLoader__.load({
       var setSyncGid = gidState[1];
       useEffect(function () { setDraft(props.boot.settings.join); }, [props.boot.settings]);
       useEffect(function () { setPending(props.boot.pending || []); }, [props.boot.pending]);
+      var gState = useState(props.boot.settings.guest || {});
+      var guestDraft = gState[0];
+      var setGuestDraft = gState[1];
+      useEffect(function () { setGuestDraft(props.boot.settings.guest || {}); }, [props.boot.settings]);
 
       function set(path, value) { setDraft(setIn(draft, path, value)); }
+      function setGuest(path, value) { setGuestDraft(setIn(guestDraft, path, value)); }
       var join = draft;
 
       async function act(item, action) {
@@ -734,6 +739,12 @@ window.__ModuleLoader__.load({
       async function doSave() {
         setSaving(true);
         await props.savePatch({ join: draft });
+        setSaving(false);
+      }
+
+      async function saveGuest() {
+        setSaving(true);
+        await props.savePatch({ guest: guestDraft });
         setSaving(false);
       }
 
@@ -822,6 +833,23 @@ window.__ModuleLoader__.load({
                 set('quiz.questions', list);
               },
             }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '普通用户 AI 通道', h('span', { className: 'qqg-sub' }, '非信任成员 @机器人 时的轻量闲聊')),
+          h(Check, { checked: guestDraft.enabled, label: '启用普通用户通道', onChange: function (v) { setGuest('enabled', v); } }),
+          h(Check, { checked: guestDraft.aiEnabled, label: '调用 AI 回复（关闭则只回提示）', onChange: function (v) { setGuest('aiEnabled', v); } }),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '每群每分钟上限' }, h(NumberInput, { value: guestDraft.perMinute, min: 1, max: 120, onChange: function (v) { setGuest('perMinute', v); } })),
+            h(Field, { label: '同一成员冷却（秒）' }, h(NumberInput, { value: guestDraft.cooldownSec, min: 0, max: 3600, onChange: function (v) { setGuest('cooldownSec', v); } })),
+            h(Field, { label: '回复字数上限' }, h(NumberInput, { value: guestDraft.replyMaxChars, min: 20, max: 1000, onChange: function (v) { setGuest('replyMaxChars', v); } })),
+            h(Field, { label: '越权禁言（秒）' }, h(NumberInput, { value: guestDraft.muteSeconds, min: 0, max: 86400, onChange: function (v) { setGuest('muteSeconds', v); } })),
+            h(Field, { label: '感情牌夹带指令禁言（秒）' }, h(NumberInput, { value: guestDraft.emotionalMuteSeconds, min: 0, max: 86400, onChange: function (v) { setGuest('emotionalMuteSeconds', v); } }))),
+          h(Field, { label: '人设补充（只影响闲聊语气）', wide: true },
+            h(TextArea, { value: guestDraft.persona || '', onChange: function (v) { setGuest('persona', v); } })),
+          h(Field, { label: '越权拦截词（每行一个）', wide: true },
+            h(TextArea, { value: listToLines(guestDraft.guardKeywords), onChange: function (v) { setGuest('guardKeywords', linesToList(v)); } })),
+          h('div', { className: 'qqg-sub' }, '管理操作、索要系统提示、扮演套设定等请求一律拒绝并警告一次；再次越权禁言 5 分钟。感情牌夹带恶意指令直接禁言 1 小时；信任成员触发时只警告并通告所有群。越权判断全在本地完成，不消耗模型。'),
+          h('div', { style: { textAlign: 'right' } },
+            h(Btn, { variant: 'primary', disabled: saving, onClick: saveGuest }, saving ? '保存中…' : '保存普通用户通道'))),
         h('div', { style: { textAlign: 'right' } },
           h(Btn, { variant: 'primary', disabled: saving, onClick: doSave }, saving ? '保存中…' : '保存入群设置')));
     }

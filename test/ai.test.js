@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { normalizeSettings } from '../lib/config.js';
-import { AiGuard, parseVerdict, parseQuizReply, parseGradeReply, solveArithmetic } from '../lib/ai.js';
+import { AiGuard, parseVerdict, parseQuizReply, parseGradeReply, solveArithmetic, JOIN_VERDICTS } from '../lib/ai.js';
 import { Moderation } from '../lib/moderation.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, aiJoinActive } from '../lib/join.js';
 
@@ -433,6 +433,64 @@ test('AI 验证：输入“换题”会换成简单题', async () => {
   assert.ok(quiz.switches >= 1);
   assert.ok(sent.some((x) => x.includes('换题') && x.includes('2+3=?')));
   cleanup();
+});
+
+test('入群自动拒绝会使用面板设置的拒绝理由', async () => {
+  const { store, cleanup } = makeStore({
+    join: {
+      autoApprove: false, autoDeclineRisk: false, declineKeywords: ['广告'], rejectReason: '群规不允许推广',
+    },
+  });
+  const calls = [];
+  const client = {
+    approveJoinRequest: async (gid, uid, op, opts) => { calls.push({ op, opts }); return { ok: true }; },
+  };
+  const r = await handleJoinRequest({
+    group_openid: 'g1', member_openid: 'u7', join_request_id: 'j7', username: '推广号',
+    verify_info: { verify_message: '我是来发广告的' },
+  }, { store, getClient: () => client });
+  assert.equal(r.decision, 'decline');
+  assert.equal(calls[0].opts.rejectReason, '群规不允许推广');
+  cleanup();
+});
+
+test('AI 自动拒绝时用 AI 自己写的 10 字内理由', async () => {
+  const { store, cleanup } = makeStore({
+    ai: { ...AI_ON.ai, join: { enabled: true, mode: 'auto' } },
+    join: {
+      autoApprove: false, autoDeclineRisk: false, declineKeywords: [], rejectReason: '暂不符合入群条件',
+    },
+  });
+  const calls = [];
+  const client = {
+    approveJoinRequest: async (gid, uid, op, opts) => { calls.push({ op, opts }); return { ok: true }; },
+  };
+  const ai = {
+    judgeJoin: async () => ({
+      ok: true, verdict: 'decline', confidence: 0.95,
+      reason: '申请人昵称与验证信息疑似广告号', rejectReason: '疑似广告账号',
+      provider: 'dsh', model: 'm',
+    }),
+  };
+  const r = await handleJoinRequest({
+    group_openid: 'g1', member_openid: 'u7', join_request_id: 'j7', username: '低价推广',
+    verify_info: { verify_message: '加我领福利' },
+  }, { store, getClient: () => client, ai });
+  assert.equal(r.decision, 'decline');
+  assert.equal(calls[0].opts.rejectReason, '疑似广告账号');
+  assert.ok(calls[0].opts.rejectReason.length <= 10);
+  cleanup();
+});
+
+test('AI 拒绝理由解析：reject_reason 最多 10 字', () => {
+  const hit = parseVerdict(
+    '{"verdict":"decline","confidence":0.9,"reason":"理由","reject_reason":"验证信息不完整且疑似广告账号"}',
+    JOIN_VERDICTS,
+  );
+  assert.equal(hit.ok, true);
+  assert.equal(hit.rejectReason.length, 10);
+  const none = parseVerdict('{"verdict":"decline","confidence":0.9}', JOIN_VERDICTS);
+  assert.equal(none.rejectReason, '');
 });
 
 test('入群审批：AI 复核/低置信度不覆盖本地通过', async () => {

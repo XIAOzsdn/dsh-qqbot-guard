@@ -171,28 +171,26 @@ function createRuntime(ctx, config, logger) {
       return { ok: false, error: errorText(error) };
     }
   };
-  runtime.notifySettingsChange = (info) => {
+  /**
+   * 向所有已管理的群广播通知；可选 @ 面板里设置的通知对象。
+   * forceMention=true 时不限制角色（安全告警必须叫到人）。
+   */
+  const broadcast = (lines, info = {}) => {
     const client = runtime.getClient();
     if (!client) return { queued: false, reason: '机器人未连接' };
     const groups = Object.keys(store.state.groups).slice(0, LIMITS.notifyMaxGroups);
     if (!groups.length) return { queued: false, reason: '还没有已加入的群' };
     const settings = store.settings;
-    const roleLabel = info?.role === 'admin' ? '最高管理员' : '普通管理员';
     const notifyName = String(settings.panel.notifyName || '').trim();
     const notifyUid = String(settings.panel.notifyOpenid || '').trim();
-    const lines = [
-      '【设置变更通知】',
-      `操作者：${roleLabel}`,
-      `时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`,
-      info?.ip ? `来源：${info.ip}` : '',
-      ...(Array.isArray(info?.summary) ? info.summary : []),
-    ].filter(Boolean).join('\n').slice(0, LIMITS.notifyMaxChars);
+    const forceMention = info?.forceMention === true;
     void (async () => {
-      // @ 仅对普通管理员生效；有 openid 时要求昵称与 openid 同时匹配。
+      // @ 默认仅对普通管理员生效；有 openid 时要求昵称与 openid 同时匹配。
       // 没填 openid 时按昵称匹配：群内该昵称唯一才会 @，同名则不猜。
       let apiVerified;
       const resolveTarget = async (gid) => {
-        if (info?.role !== 'operator' || !notifyName) return '';
+        if (!forceMention && info?.role !== 'operator') return '';
+        if (!notifyName) return '';
         if (notifyUid) {
           const member = store.findMemberByUidAndName(gid, notifyUid, notifyName);
           if (member) return member.uid;
@@ -220,18 +218,50 @@ function createRuntime(ctx, config, logger) {
           const text = (target ? mention(target) + ' ' : '') + lines;
           const r = await client.sendGroupText(gid, text);
           store.appendAudit({
-            kind: 'config', action: 'notify', groupId: gid,
+            kind: info?.auditKind || 'config', action: info?.auditAction || 'notify', groupId: gid,
             groupName: store.state.groups[gid]?.name || '',
             userId: target, userName: target ? notifyName : '',
-            detail: r.ok ? '已发送设置变更通知' : `通知发送失败：${r.err?.human || ''}`,
+            detail: r.ok ? (info?.okText || '已发送通知') : `通知发送失败：${r.err?.human || ''}`,
             ok: r.ok, code: r.ok ? '' : r.err?.code || '', confidence: 1,
           });
         } catch (error) {
-          logger.warn?.(`[qqbot-guard] 设置变更通知失败 ${gid}：${errorText(error)}`);
+          logger.warn?.(`[qqbot-guard] 群通知发送失败 ${gid}：${errorText(error)}`);
         }
       }
     })();
     return { queued: true, groups: groups.length, notifyName };
+  };
+  runtime.broadcast = broadcast;
+
+  runtime.notifySettingsChange = (info) => {
+    const roleLabel = info?.role === 'admin' ? '最高管理员' : '普通管理员';
+    const lines = [
+      '【设置变更通知】',
+      `操作者：${roleLabel}`,
+      `时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+      info?.ip ? `来源：${info.ip}` : '',
+      ...(Array.isArray(info?.summary) ? info.summary : []),
+    ].filter(Boolean).join('\n').slice(0, LIMITS.notifyMaxChars);
+    return broadcast(lines, { ...info, okText: '已发送设置变更通知' });
+  };
+
+  /** 信任成员触发感情牌夹带指令：通告所有群，并 @ 面板设置的通知对象（不禁言） */
+  runtime.notifyTrustedAbuse = (info) => {
+    const lines = [
+      '【安全告警】',
+      `群：${info?.groupName || '未知群'}（${info?.gid || ''}）`,
+      `成员：${info?.name || '未备注'}（${info?.uid || ''}）`,
+      `类型：${info?.reason || '感情牌夹带越权指令'}`,
+      `内容：${String(info?.text || '').slice(0, 100)}`,
+      '处理：已拦截并警告，未禁言（信任成员，可能是安全测试）',
+    ].join('\n').slice(0, LIMITS.notifyMaxChars);
+    return broadcast(lines, {
+      ...info,
+      forceMention: true,
+      auditKind: 'command',
+      auditAction: 'trusted-alert-notify',
+      okText: '已通告安全告警',
+    });
   };
 
   const compat = checkCompat({ dataDir });
@@ -260,6 +290,7 @@ function createRuntime(ctx, config, logger) {
       appSecret: store.settings.appSecret,
       watchJoinRequests: store.settings.watchJoinRequests,
       ai: runtime.ai,
+      notifyTrustedAbuse: runtime.notifyTrustedAbuse,
     });
     bot = next;
     try {

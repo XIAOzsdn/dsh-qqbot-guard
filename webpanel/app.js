@@ -639,6 +639,28 @@ function renderModeration(el) {
     <div class="row" style="margin-top:14px">
       <button id="m-save" class="btn primary">保存违规防护设置</button>
       <span class="hint">普通管理员修改机器人设置需三次确认。</span>
+    </div>
+
+    <div class="card">
+      <h3>普通用户 AI 通道 <span class="sub">非信任成员 @机器人 时的轻量闲聊</span></h3>
+      <div class="row">
+        <label class="check"><input id="g-enabled" type="checkbox" ${state.draft.guest.enabled ? 'checked' : ''}>启用普通用户通道</label>
+        <label class="check"><input id="g-ai" type="checkbox" ${state.draft.guest.aiEnabled ? 'checked' : ''}>调用 AI 回复（关闭则只回提示）</label>
+      </div>
+      <div class="grid cols-4">
+        <label class="field"><span>每分钟上限（每群）</span><input id="g-permin" type="number" min="1" max="120" value="${state.draft.guest.perMinute}"></label>
+        <label class="field"><span>同一成员冷却（秒）</span><input id="g-cool" type="number" min="0" value="${state.draft.guest.cooldownSec}"></label>
+        <label class="field"><span>回复字数上限</span><input id="g-maxchars" type="number" min="20" max="1000" value="${state.draft.guest.replyMaxChars}"></label>
+        <label class="field"><span>越权禁言（秒）</span><input id="g-mute" type="number" min="0" max="86400" value="${state.draft.guest.muteSeconds}"></label>
+        <label class="field"><span>感情牌夹带指令禁言（秒）</span><input id="g-emomute" type="number" min="0" max="86400" value="${state.draft.guest.emotionalMuteSeconds}"></label>
+      </div>
+      <label class="field"><span>人设补充（只影响闲聊语气）</span><textarea id="g-persona">${esc(state.draft.guest.persona)}</textarea></label>
+      <label class="field"><span>越权拦截词（每行一个）</span><textarea id="g-keywords">${esc(lines(state.draft.guest.guardKeywords))}</textarea></label>
+      <p class="hint">安全规则：管理操作、索要系统提示、扮演套设定等请求一律拒绝并警告一次；再次越权禁言 5 分钟。感情牌夹带恶意指令直接禁言 1 小时；信任成员触发时只警告并通告所有群。越权判断全在本地完成，不消耗模型。</p>
+      <div class="row" style="margin-top:10px">
+        <button id="g-save" class="btn primary">保存普通用户通道</button>
+        <span class="hint">建议搭配轻量模型或云端 API，避免本机模型占用过高。</span>
+      </div>
     </div>`;
 
   if (!ro) {
@@ -690,6 +712,20 @@ function renderModeration(el) {
     m.blacklist.addToGroupBlacklist = $('m-black-api').checked;
     savePatch(sectionPatch(['moderation']));
   });
+
+  $('g-save').addEventListener('click', () => {
+    const g = state.draft.guest;
+    g.enabled = $('g-enabled').checked;
+    g.aiEnabled = $('g-ai').checked;
+    g.perMinute = Number($('g-permin').value);
+    g.cooldownSec = Number($('g-cool').value);
+    g.replyMaxChars = Number($('g-maxchars').value);
+    g.muteSeconds = Number($('g-mute').value);
+    g.emotionalMuteSeconds = Number($('g-emomute').value);
+    g.persona = $('g-persona').value;
+    g.guardKeywords = parseLines($('g-keywords').value);
+    savePatch(sectionPatch(['guest']));
+  });
 }
 
 function renderJoin(el) {
@@ -707,6 +743,7 @@ function renderJoin(el) {
         <label class="field"><span>拒绝关键词（每行一个）</span><textarea id="j-no-key" ${disabledAttr(ro)}>${esc(lines(j.declineKeywords))}</textarea></label>
       </div>
       <label class="field"><span>拒绝理由</span><input id="j-reason" value="${esc(j.rejectReason)}" ${disabledAttr(ro)}></label>
+      <p class="hint">本地规则拒绝时使用这里的理由；AI 自动审批拒绝时由 AI 自己写不超过 10 字的说明。</p>
     </div>
 
     <div class="card">
