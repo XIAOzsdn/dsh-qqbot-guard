@@ -435,6 +435,55 @@ test('AI 验证：输入“换题”会换成简单题', async () => {
   cleanup();
 });
 
+test('入群审批：AI 复核/低置信度不覆盖本地通过', async () => {
+  const { store, cleanup } = makeStore({
+    ai: { ...AI_ON.ai, join: { enabled: true, mode: 'auto' } },
+    join: {
+      autoApprove: true, autoDeclineRisk: false, approveKeywords: ['答案'], declineKeywords: [],
+    },
+  });
+  const calls = [];
+  const client = { approveJoinRequest: async (...args) => { calls.push(args); return { ok: true }; } };
+  const ai = {
+    judgeJoin: async () => ({
+      ok: true, verdict: 'review', confidence: 0.4, reason: '不确定', provider: 'dsh', model: 'm',
+    }),
+  };
+  const r = await handleJoinRequest({
+    group_openid: 'g1',
+    member_openid: 'u8',
+    join_request_id: 'j1',
+    username: '小明',
+    verify_info: { verify_message: '答案是 A' },
+  }, { store, getClient: () => client, ai });
+  assert.equal(r.decision, 'approve');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2], 'approve');
+  cleanup();
+});
+
+test('入群事件缺少 join_request_id 也能审批', async () => {
+  const { store, cleanup } = makeStore({
+    join: {
+      autoApprove: true, autoDeclineRisk: false, approveKeywords: [], declineKeywords: [],
+    },
+  });
+  const calls = [];
+  const client = {
+    approveJoinRequest: async (gid, uid, op, opts) => {
+      calls.push({ gid, uid, op, opts });
+      return { ok: true };
+    },
+  };
+  const r = await handleJoinRequest({
+    group_openid: 'g1', member_openid: 'u8', username: '小明',
+  }, { store, getClient: () => client });
+  assert.equal(r.decision, 'approve');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].opts.joinRequestId, undefined);
+  cleanup();
+});
+
 test('AI 审批时段：白天 / 晚上 / 群活跃', () => {
   const cfg = { join: { schedule: { mode: 'day', dayStart: 8, dayEnd: 22 } } };
   const store = { state: { groups: { g1: { lastSeenAt: new Date().toISOString() } } } };
