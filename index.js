@@ -15,6 +15,7 @@ import { AuthStore } from './lib/auth.js';
 import { WebPanel } from './lib/webpanel.js';
 import { checkCompat } from './lib/compat.js';
 import { mention } from './lib/qq-api.js';
+import { AiGuard } from './lib/ai.js';
 import { LIMITS } from './lib/defaults.js';
 import { PLUGIN_NAME, PLUGIN_VERSION } from './lib/meta.js';
 
@@ -50,6 +51,22 @@ function hasWebServer(ctx) {
   }
 }
 
+/** 取 DSH 宿主的模型接缝（按需读取，服务晚加载也能拿到；拿不到就回退） */
+function llmSeamOf(ctx) {
+  const get = (name) => {
+    try {
+      return typeof ctx?.get === 'function' ? ctx.get(name) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    get llm() { return get('llm'); },
+    get agentDefaultModel() { return get('agentDefaultModel'); },
+    get attachments() { return get('attachments'); },
+  };
+}
+
 function resolveDataDir(ctx, config) {
   if (config?.dataDir) return resolve(String(config.dataDir));
   const home = String(process.env.DSH_HOME || join(homedir(), '.dsh'));
@@ -70,6 +87,7 @@ export function apply(ctx, config) {
     try { runtime.disposed = true; } catch { /* ignore */ }
     try { runtime.getBot()?.dispose?.(); } catch { /* ignore */ }
     try { runtime.panel?.dispose?.(); } catch { /* ignore */ }
+    try { runtime.ai?.dispose?.(); } catch { /* ignore */ }
     try { runtime.store.dispose(); } catch { /* ignore */ }
   };
   try {
@@ -124,11 +142,13 @@ function createRuntime(ctx, config, logger) {
   let bot;
   let restarting = false;
   const auth = new AuthStore(dataDir);
+  const ai = new AiGuard({ store, logger, dsh: llmSeamOf(ctx) });
   const runtime = {
     dataDir,
     store,
     logger,
     auth,
+    ai,
     version: PLUGIN_VERSION,
     disposed: false,
     challenges: new Map(),
@@ -230,6 +250,7 @@ function createRuntime(ctx, config, logger) {
       appId: store.settings.appId,
       appSecret: store.settings.appSecret,
       watchJoinRequests: store.settings.watchJoinRequests,
+      ai: runtime.ai,
     });
     bot = next;
     try {

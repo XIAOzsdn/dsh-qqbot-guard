@@ -30,6 +30,18 @@ const TABS = [
   ['settings', '设置'],
 ];
 
+/** AI 厂商预设：选一个就自动填好接口地址与默认模型 */
+const AI_PRESETS = [
+  { id: 'dsh', label: 'DSH 当前会话模型', baseUrl: '', model: '' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { id: 'doubao', label: '豆包（火山方舟）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1-5-pro-32k-250115' },
+  { id: 'qwen', label: '通义千问（阿里百炼）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  { id: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+  { id: 'xiaomi', label: '小米 MiMo', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.6-pro' },
+  { id: 'ollama', label: '本地 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
+  { id: 'lmstudio', label: '本地 LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-model' },
+];
+
 const $ = (id) => document.getElementById(id);
 const admin = () => state.me?.role === 'admin';
 
@@ -319,6 +331,7 @@ async function refreshStatus() {
   if (!r.ok) return;
   state.status = r.data.status;
   state.device = r.data.device || state.device;
+  if (state.boot) state.boot.ai = r.data.ai || state.boot.ai;
   updateHeader();
   if (state.tab === 'overview') render();
 }
@@ -1092,6 +1105,13 @@ function renderSettings(el) {
   const panel = state.boot.panel || {};
   const sec = state.security || {};
   const compat = state.boot.compat || {};
+  const ai = s.ai || {};
+  const aiMod = ai.moderation || {};
+  const aiJoin = ai.join || {};
+  const aiSchedule = aiJoin.schedule || {};
+  const aiVision = ai.vision || {};
+  const aiQuiz = ai.quiz || {};
+  const aiStatus = state.boot.ai || {};
   const net = state.net;
   const pwdRule = sec.passwordMin
     ? `新密码至少 ${sec.passwordMin} 位，必须同时包含字母和数字，且不能与另一个角色的密码相同。`
@@ -1140,6 +1160,81 @@ function renderSettings(el) {
       </div>
       <label class="field"><span>允许使用的成员 openid（每行一个；信任成员自动允许）</span><textarea id="s-cmd-users" ${disabledAttr(ro)}>${esc(lines(s.commands.allowUsers))}</textarea></label>
       <label class="field"><span>群规文本（/rule 返回）</span><textarea id="s-rule" ${disabledAttr(ro)}>${esc(s.commands.ruleText)}</textarea></label>
+    </div>
+
+    <div class="card">
+      <h3>AI 辅助审核 <span class="sub">本地词表的补充，模型失败自动回退</span></h3>
+      <div class="row">
+        <label class="check"><input id="ai-enabled" type="checkbox" ${ai.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用 AI 审核</label>
+        <label class="check"><input id="ai-vision" type="checkbox" ${aiVision.enabled ? 'checked' : ''} ${disabledAttr(ro)}>分析图片（需视觉模型）</label>
+        <label class="field"><span>单条最多图片</span><input id="ai-max-images" type="number" min="1" max="5" value="${Number(aiVision.maxImages) || 3}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>单张上限（MB）</span><input id="ai-max-mb" type="number" min="1" max="8" step="0.5" value="${Number(((Number(aiVision.maxBytes) || 3145728) / 1048576).toFixed(1))}" ${disabledAttr(ro)}></label>
+        <span class="pill ${aiStatus.available ? 'ok' : 'off'}">${aiStatus.available ? '模型可用：' + esc(aiStatus.model || '') : esc(aiStatus.reason || '未配置模型')}</span>
+        <span class="pill ${aiStatus.vision && aiStatus.vision.ready ? 'ok' : 'off'}">${aiStatus.vision && aiStatus.vision.ready ? '可读图' : '图片分析不可用'}</span>
+      </div>
+      <div class="grid cols-3" style="margin-top:10px">
+        <label class="field"><span>接入方式</span>
+          <select id="ai-provider" ${disabledAttr(ro)}>
+            <option value="dsh" ${ai.provider === 'dsh' ? 'selected' : ''}>DSH 当前会话模型</option>
+            <option value="openai" ${ai.provider === 'openai' ? 'selected' : ''}>OpenAI 兼容接口</option>
+          </select></label>
+        <label class="field"><span>快速选择厂商（自动填地址与模型）</span>
+          <select id="ai-preset" ${disabledAttr(ro)}>
+            ${AI_PRESETS.map((p) => `<option value="${p.id}">${esc(p.label)}</option>`).join('')}
+          </select></label>
+        <label class="field"><span>模型名称</span><input id="ai-model" value="${esc(ai.model || '')}" placeholder="deepseek-chat / qwen-plus / glm-4-flash" ${disabledAttr(ro)}></label>
+      </div>
+      <div class="grid cols-2">
+        <label class="field"><span>接口地址（OpenAI 兼容，通常以 /v1 结尾）</span><input id="ai-base" value="${esc(ai.baseUrl || '')}" placeholder="https://api.deepseek.com/v1" ${disabledAttr(ro)}></label>
+        <label class="field"><span>API Key（留空不修改；本地模型可留空）</span><input id="ai-key" type="password" placeholder="${ai.apiKeySet ? '已设置，留空不变' : '填写厂商密钥'}" ${disabledAttr(ro)}></label>
+      </div>
+      <div class="grid cols-3">
+        <label class="field"><span>超时（毫秒）</span><input id="ai-timeout" type="number" min="1000" max="60000" value="${Number(ai.timeoutMs) || 8000}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>最大输出 tokens</span><input id="ai-tokens" type="number" min="32" max="2000" value="${Number(ai.maxTokens) || 300}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>最低置信度（0-1）</span><input id="ai-minconf" type="number" min="0" max="1" step="0.05" value="${ai.minConfidence == null ? 0.7 : ai.minConfidence}" ${disabledAttr(ro)}></label>
+      </div>
+      <div class="row" style="gap:16px">
+        <label class="check"><input id="ai-mod" type="checkbox" ${aiMod.enabled ? 'checked' : ''} ${disabledAttr(ro)}>违规防护接入 AI</label>
+        <label class="field"><span>处理方式</span>
+          <select id="ai-mod-mode" ${disabledAttr(ro)}>
+            <option value="auto" ${aiMod.mode === 'auto' ? 'selected' : ''}>识别即处置</option>
+            <option value="suggest" ${aiMod.mode === 'suggest' ? 'selected' : ''}>只记录建议</option>
+          </select></label>
+        <label class="field"><span>最短检测字数</span><input id="ai-mod-min" type="number" min="1" max="200" value="${Number(aiMod.minChars) || 4}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>每群每分钟上限</span><input id="ai-mod-rate" type="number" min="1" max="600" value="${Number(aiMod.maxPerMinute) || 30}" ${disabledAttr(ro)}></label>
+        <label class="check"><input id="ai-img" type="checkbox" ${aiMod.analyzeImages ? 'checked' : ''} ${disabledAttr(ro)}>违规防护分析图片</label>
+      </div>
+      <div class="row" style="gap:16px">
+        <label class="check"><input id="ai-join" type="checkbox" ${aiJoin.enabled ? 'checked' : ''} ${disabledAttr(ro)}>入群审批接入 AI</label>
+        <label class="field"><span>处理方式</span>
+          <select id="ai-join-mode" ${disabledAttr(ro)}>
+            <option value="suggest" ${aiJoin.mode === 'suggest' ? 'selected' : ''}>只给建议</option>
+            <option value="auto" ${aiJoin.mode === 'auto' ? 'selected' : ''}>AI 全权判断</option>
+          </select></label>
+        <label class="field"><span>启用时段</span>
+          <select id="ai-join-sched" ${disabledAttr(ro)}>
+            <option value="always" ${aiSchedule.mode === 'always' ? 'selected' : ''}>全天 24 小时</option>
+            <option value="day" ${aiSchedule.mode === 'day' ? 'selected' : ''}>仅白天</option>
+            <option value="night" ${aiSchedule.mode === 'night' ? 'selected' : ''}>仅晚上</option>
+            <option value="active" ${aiSchedule.mode === 'active' ? 'selected' : ''}>群活跃时</option>
+          </select></label>
+        <label class="field"><span>白天开始（时）</span><input id="ai-day-start" type="number" min="0" max="23" value="${Number(aiSchedule.dayStart ?? 8)}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>白天结束（时）</span><input id="ai-day-end" type="number" min="1" max="24" value="${Number(aiSchedule.dayEnd ?? 22)}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>活跃判定（分钟）</span><input id="ai-idle" type="number" min="1" max="1440" value="${Number(aiSchedule.idleMinutes ?? 30)}" ${disabledAttr(ro)}></label>
+        <button id="ai-test" class="btn" ${disabledAttr(ro)}>测试当前模型</button>
+        <span id="ai-test-result" class="hint">测试使用已保存的配置，改完请先保存</span>
+      </div>
+      <div class="row" style="gap:16px">
+        <label class="check"><input id="ai-quiz" type="checkbox" ${aiQuiz.enabled ? 'checked' : ''} ${disabledAttr(ro)}>入群验证由 AI 随机出题</label>
+        <label class="field"><span>题型</span>
+          <select id="ai-quiz-mode" ${disabledAttr(ro)}>
+            <option value="mixed" ${aiQuiz.mode === 'mixed' ? 'selected' : ''}>算术 + 日常</option>
+            <option value="arithmetic" ${aiQuiz.mode === 'arithmetic' ? 'selected' : ''}>只出算术</option>
+            <option value="daily" ${aiQuiz.mode === 'daily' ? 'selected' : ''}>只出日常常识</option>
+          </select></label>
+        <label class="check"><input id="ai-quiz-judge" type="checkbox" ${aiQuiz.judge ? 'checked' : ''} ${disabledAttr(ro)}>答案不一致时让 AI 判卷</label>
+      </div>
+      <p class="hint">AI 只处理本地词表/正则没命中的消息；开启图片分析后会一起判断图片里的辱骂、广告和二维码。入群审批只在所选时段生效，AI 不确定会转人工；AI 出题失败会回退本地题库，本地比对不一致时可再让 AI 判卷。模型超时、断网或输出不合规都会自动回退，不会误踢。</p>
     </div>
 
     <div class="card">
@@ -1225,6 +1320,42 @@ function renderSettings(el) {
   };
   $('s-notify-check').addEventListener('click', () => { void verifyNotify(false); });
 
+  const syncAiProvider = () => {
+    const dsh = $('ai-provider').value === 'dsh';
+    for (const id of ['ai-base', 'ai-key', 'ai-model', 'ai-preset']) {
+      const node = $(id);
+      if (node) node.disabled = dsh;
+    }
+  };
+  $('ai-provider').addEventListener('change', syncAiProvider);
+  $('ai-preset').addEventListener('change', () => {
+    const p = AI_PRESETS.find((x) => x.id === $('ai-preset').value);
+    if (!p) return;
+    if (p.id === 'dsh') {
+      $('ai-provider').value = 'dsh';
+    } else {
+      $('ai-provider').value = 'openai';
+      $('ai-base').value = p.baseUrl;
+      $('ai-model').value = p.model;
+    }
+    syncAiProvider();
+  });
+  $('ai-test').addEventListener('click', async () => {
+    const out = $('ai-test-result');
+    out.textContent = '测试中…';
+    out.style.color = '';
+    const r = await req('/ai/test', { method: 'POST', body: {} });
+    if (!r.ok) {
+      out.textContent = r.error?.message || '测试失败';
+      out.style.color = 'var(--bad)';
+      return;
+    }
+    const d = r.data || {};
+    out.style.color = 'var(--ok)';
+    out.textContent = `可用：判定「${d.verdict}」，置信度 ${Number(d.confidence).toFixed(2)} · ${d.provider}/${d.model} · ${d.latencyMs}ms`;
+  });
+  syncAiProvider();
+
   $('s-save').addEventListener('click', async () => {
     s.appId = $('s-appid').value.trim();
     const secret = $('s-secret').value;
@@ -1253,7 +1384,33 @@ function renderSettings(el) {
     s.commands.prefix = $('s-cmd-prefix').value.trim() || '/';
     s.commands.allowUsers = parseLines($('s-cmd-users').value);
     s.commands.ruleText = $('s-rule').value;
-    await savePatch(sectionPatch(['appId', 'appSecret', 'autoConnect', 'watchJoinRequests', 'panel', 'commands']));
+    s.ai.enabled = $('ai-enabled').checked;
+    s.ai.provider = $('ai-provider').value === 'dsh' ? 'dsh' : 'openai';
+    s.ai.baseUrl = $('ai-base').value.trim();
+    const aiKey = $('ai-key').value;
+    if (aiKey) s.ai.apiKey = aiKey;
+    s.ai.model = $('ai-model').value.trim();
+    s.ai.timeoutMs = Number($('ai-timeout').value);
+    s.ai.maxTokens = Number($('ai-tokens').value);
+    s.ai.minConfidence = Number($('ai-minconf').value);
+    s.ai.vision.enabled = $('ai-vision').checked;
+    s.ai.vision.maxImages = Number($('ai-max-images').value);
+    s.ai.vision.maxBytes = Math.round(Number($('ai-max-mb').value) * 1024 * 1024);
+    s.ai.moderation.enabled = $('ai-mod').checked;
+    s.ai.moderation.mode = $('ai-mod-mode').value;
+    s.ai.moderation.analyzeImages = $('ai-img').checked;
+    s.ai.moderation.minChars = Number($('ai-mod-min').value);
+    s.ai.moderation.maxPerMinute = Number($('ai-mod-rate').value);
+    s.ai.join.enabled = $('ai-join').checked;
+    s.ai.join.mode = $('ai-join-mode').value;
+    s.ai.join.schedule.mode = $('ai-join-sched').value;
+    s.ai.join.schedule.dayStart = Number($('ai-day-start').value);
+    s.ai.join.schedule.dayEnd = Number($('ai-day-end').value);
+    s.ai.join.schedule.idleMinutes = Number($('ai-idle').value);
+    s.ai.quiz.enabled = $('ai-quiz').checked;
+    s.ai.quiz.mode = $('ai-quiz-mode').value;
+    s.ai.quiz.judge = $('ai-quiz-judge').checked;
+    await savePatch(sectionPatch(['appId', 'appSecret', 'autoConnect', 'watchJoinRequests', 'panel', 'commands', 'ai']));
     if (pendingVerify) toast('已保存；通知对象暂未校验（机器人未连接或无台账记录）', false);
   });
 

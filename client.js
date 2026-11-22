@@ -214,6 +214,7 @@ window.__ModuleLoader__.load({
         value: props.value == null ? '' : props.value,
         placeholder: props.placeholder || '',
         type: props.type || 'text',
+        disabled: !!props.disabled,
         onChange: function (e) { props.onChange(e.target.value); },
         style: props.style,
       });
@@ -226,6 +227,8 @@ window.__ModuleLoader__.load({
         type: 'number',
         min: props.min,
         max: props.max,
+        step: props.step,
+        disabled: !!props.disabled,
         onChange: function (e) { props.onChange(Number(e.target.value)); },
         style: { width: 110 },
       });
@@ -251,6 +254,7 @@ window.__ModuleLoader__.load({
       return h('select', {
         className: 'qqg-sel',
         value: props.value,
+        disabled: !!props.disabled,
         onChange: function (e) { props.onChange(e.target.value); },
         style: props.style,
       }, props.options.map(function (o) {
@@ -283,6 +287,18 @@ window.__ModuleLoader__.load({
       { value: 'warn', label: '警告' },
       { value: 'mute', label: '禁言' },
       { value: 'kick', label: '移出群聊' },
+    ];
+
+    /** AI 厂商预设：选一个就自动填好接口地址与默认模型 */
+    var AI_PRESETS = [
+      { id: 'dsh', label: 'DSH 当前会话模型', baseUrl: '', model: '' },
+      { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+      { id: 'doubao', label: '豆包（火山方舟）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1-5-pro-32k-250115' },
+      { id: 'qwen', label: '通义千问（阿里百炼）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+      { id: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+      { id: 'xiaomi', label: '小米 MiMo', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.6-pro' },
+      { id: 'ollama', label: '本地 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
+      { id: 'lmstudio', label: '本地 LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-model' },
     ];
 
     var TABS = [
@@ -339,6 +355,7 @@ window.__ModuleLoader__.load({
                 status: r.data.status,
                 panel: r.data.panel || prev.panel,
                 device: r.data.device || prev.device,
+                ai: r.data.ai || prev.ai,
                 counts: Object.assign({}, prev.counts, { counters: r.data.counts }),
               });
             });
@@ -701,7 +718,13 @@ window.__ModuleLoader__.load({
                   h('div', null,
                     h('b', null, item.username || '未知昵称'), ' ',
                     h('span', { className: 'qqg-mono' }, item.memberOpenid || ''), ' ',
-                    item.riskTips ? h('span', { className: 'qqg-pill', 'data-t': 'bad' }, '风险') : null),
+                    item.riskTips ? h('span', { className: 'qqg-pill', 'data-t': 'bad' }, '风险') : null, ' ',
+                    item.aiVerdict
+                      ? h('span', {
+                        className: 'qqg-pill',
+                        'data-t': item.aiVerdict === 'decline' ? 'bad' : item.aiVerdict === 'approve' ? 'ok' : 'warn',
+                      }, `AI 建议：${item.aiVerdict === 'decline' ? '拒绝' : item.aiVerdict === 'approve' ? '通过' : '复核'}${item.aiConfidence ? ' ' + Number(item.aiConfidence).toFixed(2) : ''}`)
+                      : null),
                   h('div', { className: 'qqg-sub' }, '验证：' + (item.verifyMessage || item.verify_message || '-') + ' · 来源：' + (item.applySource || '-')),
                   h('div', { className: 'qqg-mono' }, '群 ' + (item.groupId || '') + ' · ' + fmtTime(item.seenAt))),
                 h('div', { style: { display: 'flex', gap: 6 } },
@@ -1252,9 +1275,25 @@ window.__ModuleLoader__.load({
       var netBusyState = useState(false);
       var netBusy = netBusyState[0];
       var setNetBusy = netBusyState[1];
+      var aiKeyState = useState('');
+      var aiKey = aiKeyState[0];
+      var setAiKey = aiKeyState[1];
+      var aiTestState = useState(null);
+      var aiTest = aiTestState[0];
+      var setAiTest = aiTestState[1];
+      var aiPresetState = useState('');
+      var aiPreset = aiPresetState[0];
+      var setAiPreset = aiPresetState[1];
       useEffect(function () { setDraft(boot.settings || {}); }, [boot.settings]);
 
       function set(path, value) { setDraft(setIn(draft, path, value)); }
+      function setAi(values) {
+        var next = draft;
+        Object.keys(values).forEach(function (key) {
+          next = setIn(next, 'ai.' + key, values[key]);
+        });
+        setDraft(next);
+      }
 
       async function verifyNotify(silent) {
         var name = String(draft.panel.notifyName || '').trim();
@@ -1293,15 +1332,32 @@ window.__ModuleLoader__.load({
           watchJoinRequests: draft.watchJoinRequests,
           panel: draft.panel,
           commands: draft.commands,
+          ai: draft.ai,
         };
         if (secret.trim()) patch.appSecret = secret.trim();
+        if (aiKey.trim()) patch.ai = Object.assign({}, draft.ai, { apiKey: aiKey.trim() });
         setSaving(true);
         var okSaved = await props.savePatch(patch);
         setSaving(false);
         if (okSaved) {
           setSecret('');
+          setAiKey('');
           if (pendingVerify) props.notify('已保存；通知对象暂未校验（机器人未连接或无台账记录）');
         }
+      }
+
+      async function runAiTest() {
+        setAiTest({ busy: true, text: '测试中…' });
+        var r = await api('ai/test', {});
+        if (!r.ok) {
+          setAiTest({ text: (r.error && r.error.message) || '测试失败', bad: true });
+          return;
+        }
+        var d = r.data || {};
+        setAiTest({
+          text: '可用：判定「' + d.verdict + '」，置信度 ' + Number(d.confidence).toFixed(2)
+            + ' · ' + d.provider + '/' + d.model + ' · ' + d.latencyMs + 'ms',
+        });
       }
 
       async function changePassword() {
@@ -1425,6 +1481,202 @@ window.__ModuleLoader__.load({
             h(TextArea, { value: listToLines(draft.commands.allowUsers), onChange: function (v) { set('commands.allowUsers', linesToList(v)); } })),
           h(Field, { label: '群规文本（/rule 返回）', wide: true },
             h(TextArea, { value: draft.commands.ruleText || '', onChange: function (v) { set('commands.ruleText', v); } }))),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, 'AI 辅助审核', h('span', { className: 'qqg-sub' }, '本地词表的补充，模型失败自动回退')),
+          h('div', { className: 'qqg-row' },
+            h(Check, { checked: draft.ai.enabled, label: '启用 AI 审核', onChange: function (v) { setAi({ enabled: v }); } }),
+            h(Check, {
+              checked: draft.ai.vision.enabled,
+              label: '分析图片（需视觉模型）',
+              onChange: function (v) { setAi({ vision: Object.assign({}, draft.ai.vision, { enabled: v }) }); },
+            }),
+            h(Field, { label: '单条最多图片' },
+              h(NumberInput, {
+                value: draft.ai.vision.maxImages,
+                min: 1,
+                max: 5,
+                onChange: function (v) { setAi({ vision: Object.assign({}, draft.ai.vision, { maxImages: v }) }); },
+              })),
+            h(Field, { label: '单张上限（MB）' },
+              h(NumberInput, {
+                value: Number(((Number(draft.ai.vision.maxBytes) || 3145728) / 1048576).toFixed(1)),
+                min: 1,
+                max: 8,
+                step: 0.5,
+                onChange: function (v) {
+                  setAi({ vision: Object.assign({}, draft.ai.vision, { maxBytes: Math.round(Number(v) * 1048576) }) });
+                },
+              })),
+            h('span', {
+              className: 'qqg-pill',
+              'data-t': boot.ai && boot.ai.available ? 'ok' : 'off',
+            }, boot.ai && boot.ai.available
+              ? '模型可用：' + (boot.ai.model || '')
+              : ((boot.ai && boot.ai.reason) || '未配置模型')),
+            h('span', {
+              className: 'qqg-pill',
+              'data-t': boot.ai && boot.ai.vision && boot.ai.vision.ready ? 'ok' : 'off',
+            }, boot.ai && boot.ai.vision && boot.ai.vision.ready ? '可读图' : '图片分析不可用')),
+          h('div', { className: 'qqg-row', style: { marginTop: 8 } },
+            h(Field, { label: '接入方式' },
+              h(Select, {
+                value: draft.ai.provider,
+                onChange: function (v) { setAi({ provider: v }); },
+                options: [
+                  { value: 'dsh', label: 'DSH 当前会话模型' },
+                  { value: 'openai', label: 'OpenAI 兼容接口' },
+                ],
+              })),
+            h(Field, { label: '快速选择厂商（自动填地址与模型）' },
+              h(Select, {
+                value: aiPreset,
+                onChange: function (v) {
+                  setAiPreset(v);
+                  var p = null;
+                  for (var i = 0; i < AI_PRESETS.length; i += 1) {
+                    if (AI_PRESETS[i].id === v) p = AI_PRESETS[i];
+                  }
+                  if (!p) return;
+                  if (p.id === 'dsh') setAi({ provider: 'dsh' });
+                  else setAi({ provider: 'openai', baseUrl: p.baseUrl, model: p.model });
+                },
+                options: [{ value: '', label: '选择厂商…' }].concat(AI_PRESETS.map(function (p) {
+                  return { value: p.id, label: p.label };
+                })),
+              })),
+            h(Field, { label: '模型名称' },
+              h(TextInput, {
+                value: draft.ai.model || '',
+                disabled: draft.ai.provider === 'dsh',
+                placeholder: 'deepseek-chat / qwen-plus / glm-4-flash',
+                onChange: function (v) { setAi({ model: v }); },
+              }))),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '接口地址（OpenAI 兼容，通常以 /v1 结尾）' },
+              h(TextInput, {
+                value: draft.ai.baseUrl || '',
+                disabled: draft.ai.provider === 'dsh',
+                placeholder: 'https://api.deepseek.com/v1',
+                onChange: function (v) { setAi({ baseUrl: v }); },
+                style: { minWidth: 320 },
+              })),
+            h(Field, { label: 'API Key（留空不修改；本地模型可留空）' },
+              h(TextInput, {
+                value: aiKey,
+                type: 'password',
+                disabled: draft.ai.provider === 'dsh',
+                placeholder: draft.ai.apiKeySet ? '已设置，留空不变' : '填写厂商密钥',
+                onChange: setAiKey,
+                style: { minWidth: 260 },
+              }))),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '超时（毫秒）' },
+              h(NumberInput, { value: draft.ai.timeoutMs, min: 1000, max: 60000, onChange: function (v) { setAi({ timeoutMs: v }); } })),
+            h(Field, { label: '最大输出 tokens' },
+              h(NumberInput, { value: draft.ai.maxTokens, min: 32, max: 2000, onChange: function (v) { setAi({ maxTokens: v }); } })),
+            h(Field, { label: '最低置信度（0-1）' },
+              h(NumberInput, { value: draft.ai.minConfidence, min: 0, max: 1, step: 0.05, onChange: function (v) { setAi({ minConfidence: v }); } }))),
+          h('div', { className: 'qqg-row', style: { gap: 16 } },
+            h(Check, {
+              checked: draft.ai.moderation.enabled,
+              label: '违规防护接入 AI',
+              onChange: function (v) { setAi({ moderation: Object.assign({}, draft.ai.moderation, { enabled: v }) }); },
+            }),
+            h(Field, { label: '处理方式' },
+              h(Select, {
+                value: draft.ai.moderation.mode,
+                onChange: function (v) { setAi({ moderation: Object.assign({}, draft.ai.moderation, { mode: v }) }); },
+                options: [{ value: 'auto', label: '识别即处置' }, { value: 'suggest', label: '只记录建议' }],
+              })),
+            h(Field, { label: '最短检测字数' },
+              h(NumberInput, { value: draft.ai.moderation.minChars, min: 1, max: 200, onChange: function (v) { setAi({ moderation: Object.assign({}, draft.ai.moderation, { minChars: v }) }); } })),
+            h(Field, { label: '每群每分钟上限' },
+              h(NumberInput, { value: draft.ai.moderation.maxPerMinute, min: 1, max: 600, onChange: function (v) { setAi({ moderation: Object.assign({}, draft.ai.moderation, { maxPerMinute: v }) }); } })),
+            h(Check, {
+              checked: draft.ai.moderation.analyzeImages,
+              label: '违规防护分析图片',
+              onChange: function (v) { setAi({ moderation: Object.assign({}, draft.ai.moderation, { analyzeImages: v }) }); },
+            })),
+          h('div', { className: 'qqg-row', style: { gap: 16 } },
+            h(Check, {
+              checked: draft.ai.join.enabled,
+              label: '入群审批接入 AI',
+              onChange: function (v) { setAi({ join: Object.assign({}, draft.ai.join, { enabled: v }) }); },
+            }),
+            h(Field, { label: '处理方式' },
+              h(Select, {
+                value: draft.ai.join.mode,
+                onChange: function (v) { setAi({ join: Object.assign({}, draft.ai.join, { mode: v }) }); },
+                options: [{ value: 'suggest', label: '只给建议' }, { value: 'auto', label: 'AI 全权判断' }],
+              })),
+            h(Field, { label: '启用时段' },
+              h(Select, {
+                value: draft.ai.join.schedule.mode,
+                onChange: function (v) {
+                  setAi({ join: Object.assign({}, draft.ai.join, {
+                    schedule: Object.assign({}, draft.ai.join.schedule, { mode: v }),
+                  }) });
+                },
+                options: [
+                  { value: 'always', label: '全天 24 小时' },
+                  { value: 'day', label: '仅白天' },
+                  { value: 'night', label: '仅晚上' },
+                  { value: 'active', label: '群活跃时' },
+                ],
+              })),
+            h(Field, { label: '白天开始（时）' },
+              h(NumberInput, {
+                value: draft.ai.join.schedule.dayStart, min: 0, max: 23,
+                onChange: function (v) {
+                  setAi({ join: Object.assign({}, draft.ai.join, {
+                    schedule: Object.assign({}, draft.ai.join.schedule, { dayStart: v }),
+                  }) });
+                },
+              })),
+            h(Field, { label: '白天结束（时）' },
+              h(NumberInput, {
+                value: draft.ai.join.schedule.dayEnd, min: 1, max: 24,
+                onChange: function (v) {
+                  setAi({ join: Object.assign({}, draft.ai.join, {
+                    schedule: Object.assign({}, draft.ai.join.schedule, { dayEnd: v }),
+                  }) });
+                },
+              })),
+            h(Field, { label: '活跃判定（分钟）' },
+              h(NumberInput, {
+                value: draft.ai.join.schedule.idleMinutes, min: 1, max: 1440,
+                onChange: function (v) {
+                  setAi({ join: Object.assign({}, draft.ai.join, {
+                    schedule: Object.assign({}, draft.ai.join.schedule, { idleMinutes: v }),
+                  }) });
+                },
+              }))),
+          h('div', { className: 'qqg-row', style: { gap: 16 } },
+            h(Check, {
+              checked: draft.ai.quiz.enabled,
+              label: '入群验证由 AI 随机出题',
+              onChange: function (v) { setAi({ quiz: Object.assign({}, draft.ai.quiz, { enabled: v }) }); },
+            }),
+            h(Field, { label: '题型' },
+              h(Select, {
+                value: draft.ai.quiz.mode,
+                onChange: function (v) { setAi({ quiz: Object.assign({}, draft.ai.quiz, { mode: v }) }); },
+                options: [
+                  { value: 'mixed', label: '算术 + 日常' },
+                  { value: 'arithmetic', label: '只出算术' },
+                  { value: 'daily', label: '只出日常常识' },
+                ],
+              })),
+            h(Check, {
+              checked: draft.ai.quiz.judge,
+              label: '答案不一致时让 AI 判卷',
+              onChange: function (v) { setAi({ quiz: Object.assign({}, draft.ai.quiz, { judge: v }) }); },
+            }),
+            h(Btn, { onClick: runAiTest, disabled: !!(aiTest && aiTest.busy) }, '测试当前模型'),
+            aiTest
+              ? h('span', { className: 'qqg-pill', 'data-t': aiTest.bad ? 'bad' : 'ok' }, aiTest.text)
+              : h('span', { className: 'qqg-hint' }, '测试使用已保存的配置，改完请先保存')),
+          h('p', { className: 'qqg-hint' }, 'AI 只处理本地词表/正则没命中的消息；开启图片分析后会一起判断图片里的辱骂、广告和二维码。入群审批只在所选时段生效，AI 不确定会转人工；AI 出题失败会回退本地题库，本地比对不一致时可再让 AI 判卷。')),
         h('div', { className: 'qqg-card' },
           h('h4', null, '安全'),
           h('dl', { className: 'qqg-kv' },
