@@ -64,6 +64,19 @@ function parseLines(text) {
   }
   return out;
 }
+
+/** 只按换行拆分：欢迎语/句子类内容允许包含逗号 */
+function parseLinesOnly(text) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/u)) {
+    const s = raw.trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
 function fmtTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -744,7 +757,7 @@ function renderJoin(el) {
 
   $('j-save').addEventListener('click', () => {
     j.welcome.template = $('j-template').value;
-    j.welcome.variants = parseLines($('j-variants').value);
+    j.welcome.variants = parseLinesOnly($('j-variants').value);
     j.autoApprove = $('j-auto').checked;
     j.autoDeclineRisk = $('j-risk').checked;
     j.approveKeywords = parseLines($('j-ok-key').value);
@@ -962,7 +975,7 @@ function renderGroups(el) {
     const words = parseLines($('og-words').value);
     if (words.length) mod.keywords = words;
     if ($('og-obs').value !== '') join.observation = { minutes: Number($('og-obs').value) };
-    const welcome = parseLines($('og-welcome').value);
+    const welcome = parseLinesOnly($('og-welcome').value);
     if (welcome.length) join.welcome = { variants: welcome };
     const patch = { groups: { [gid]: {} } };
     if (Object.keys(mod).length) patch.groups[gid].moderation = mod;

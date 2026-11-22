@@ -152,6 +152,18 @@ window.__ModuleLoader__.load({
       });
       return out;
     }
+    /** 只按换行拆分：欢迎语里允许出现逗号 */
+    function linesToListOnly(text) {
+      var seen = {};
+      var out = [];
+      String(text || '').split(/\r?\n/u).forEach(function (raw) {
+        var s = raw.trim();
+        if (!s || seen[s]) return;
+        seen[s] = true;
+        out.push(s);
+      });
+      return out;
+    }
     function setIn(obj, path, value) {
       var keys = path.split('.');
       var root = Array.isArray(obj) ? obj.slice() : Object.assign({}, obj);
@@ -778,7 +790,7 @@ window.__ModuleLoader__.load({
           h(Field, { label: '欢迎语模板（{user} 为 @新成员，{name} 为昵称，{group} 为群名）', wide: true },
             h(TextArea, { value: join.welcome.template || '', onChange: function (v) { set('welcome.template', v); } })),
           h(Field, { label: '欢迎语变体（每行一条；多条时按群+成员+日期固定随机）', wide: true },
-            h(TextArea, { value: listToLines(join.welcome.variants), onChange: function (v) { set('welcome.variants', linesToList(v)); } })),
+            h(TextArea, { value: listToLines(join.welcome.variants), onChange: function (v) { set('welcome.variants', linesToListOnly(v)); } })),
           h(Field, { label: '随机种子盐' },
             h(TextInput, { value: join.welcome.seedSalt || '', onChange: function (v) { set('welcome.seedSalt', v); } }))),
         h('div', { className: 'qqg-card' },
@@ -1018,7 +1030,7 @@ window.__ModuleLoader__.load({
         var words = linesToList(ov.keywords);
         if (words.length) mod.keywords = words;
         if (String(ov.obsMinutes) !== '') join.observation = { minutes: Number(ov.obsMinutes) };
-        var welcome = linesToList(ov.welcome);
+        var welcome = linesToListOnly(ov.welcome);
         if (welcome.length) join.welcome = { variants: welcome };
         var entry = { __replace: true };
         if (Object.keys(mod).length) entry.moderation = mod;
