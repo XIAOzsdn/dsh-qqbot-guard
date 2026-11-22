@@ -161,6 +161,7 @@ test('公告创建与发布接口', async () => {
 test('三次确认仅约束普通管理员', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qqg-confirm-'));
   const store = new Store(dir);
+  const notified = [];
   const runtime = {
     store,
     dataDir: dir,
@@ -168,6 +169,10 @@ test('三次确认仅约束普通管理员', async () => {
     logger: console,
     getBot: () => ({ snapshot: () => ({ configured: false, state: 'unconfigured' }) }),
     restartBot() {},
+    notifySettingsChange(info) {
+      notified.push(info.role);
+      return { queued: true, groups: 1 };
+    },
   };
   const api = createApi(runtime);
   const operator = { role: 'operator', via: 'panel', sessionId: 'op-1' };
@@ -201,14 +206,17 @@ test('三次确认仅约束普通管理员', async () => {
     body: { patch: { moderation: { action: 'mute' } }, confirmToken: token },
   });
   assert.equal(r.ok, true);
+  assert.deepEqual(notified, ['operator']);
 
-  // 最高管理员改机器人级设置直接生效，不再需要三次确认
+  // 最高管理员改机器人级设置直接生效，不三次确认，也不在群里发任何消息
   r = await api.dispatch({
     method: 'POST', path: '/settings', auth: admin,
     body: { patch: { moderation: { action: 'kick' } } },
   });
   assert.equal(r.ok, true);
   assert.equal(store.settings.moderation.action, 'kick');
+  assert.equal(r.data.notify, undefined);
+  assert.deepEqual(notified, ['operator']);
 
   store.dispose();
   rmSync(dir, { recursive: true, force: true });
