@@ -140,6 +140,37 @@ test('成员搜索返回台账数据', async () => {
   cleanup();
 });
 
+test('成员搜索支持全角/大小写与待审批昵称', async () => {
+  const { routes, store, cleanup } = setup();
+  store.upsertMember('g1', 'u1', { name: 'Alice' });
+  store.putPending('g1', {
+    joinRequestId: 'j1',
+    memberOpenid: 'u9',
+    username: '新人小王',
+    seenAt: new Date().toISOString(),
+    status: 'pending',
+    decision: '',
+  });
+
+  let r = await call(routes, '/api/qqbot-guard/members', 'GET', {
+    query: '?gid=g1&q=' + encodeURIComponent('ａｌｉｃｅ'),
+  });
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.data.members.some((m) => m.uid === 'u1'), true);
+
+  r = await call(routes, '/api/qqbot-guard/members', 'GET', {
+    query: '?gid=g1&q=' + encodeURIComponent('小王'),
+  });
+  assert.equal(r.json.data.members.some((m) => m.uid === 'u9' && m.pending), true);
+
+  // 不传 gid 时也能在所有群里搜索
+  r = await call(routes, '/api/qqbot-guard/members', 'GET', {
+    query: '?q=' + encodeURIComponent('alice'),
+  });
+  assert.equal(r.json.data.members.some((m) => m.uid === 'u1'), true);
+  cleanup();
+});
+
 test('通知对象校验：昵称与 openid 必须同时匹配', async () => {
   const { routes, runtime, store, cleanup } = setup();
   store.upsertMember('g1', 'u1', { name: '群主' });
@@ -175,6 +206,22 @@ test('通知对象校验：昵称与 openid 必须同时匹配', async () => {
   assert.equal(r.json.data.matched, false);
   assert.equal(r.json.data.definite, true);
   assert.match(r.json.data.reason, /openid/u);
+
+  // 不填 openid：按昵称唯一匹配
+  r = await call(routes, '/api/qqbot-guard/notify/verify', 'POST', {
+    body: { name: '群主', uid: '' }, headers,
+  });
+  assert.equal(r.json.data.matched, true);
+  assert.equal(r.json.data.source, 'name');
+
+  // 同名成员不唯一时不猜
+  store.upsertMember('g1', 'u2', { name: '群主' });
+  r = await call(routes, '/api/qqbot-guard/notify/verify', 'POST', {
+    body: { name: '群主', uid: '' }, headers,
+  });
+  assert.equal(r.json.data.matched, false);
+  assert.equal(r.json.data.definite, true);
+  assert.ok(r.json.data.candidates.length >= 2);
   cleanup();
 });
 

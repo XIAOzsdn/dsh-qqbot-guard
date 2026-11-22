@@ -21,8 +21,9 @@ function fakeLlm(reply) {
   return {
     stream() {
       return (async function* gen() {
-        yield { text: reply.slice(0, 6) };
-        yield { text: reply.slice(6) };
+        yield { type: 'text-delta', index: 0, text: reply.slice(0, 6) };
+        yield { type: 'text-delta', index: 0, text: reply.slice(6) };
+        yield { type: 'finish', reason: { kind: 'stop' } };
       })();
     },
   };
@@ -65,6 +66,58 @@ test('AI 配置归一化与默认值', () => {
   assert.equal(value.ai.join.schedule.mode, 'always');
   assert.equal(value.ai.quiz.mode, 'mixed');
   assert.equal(value.ai.quiz.switchAfterFails, 2);
+});
+
+test('DSH 调用参数：system 单独传、内容用 blocks、采用最低推理强度', async () => {
+  const { store, cleanup } = makeStore(AI_ON);
+  let seen = null;
+  const ai = new AiGuard({
+    store,
+    logger: console,
+    dsh: {
+      llm: {
+        resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low' }, { id: 'high' }] } }),
+        stream: (options) => {
+          seen = options;
+          return (async function* gen() {
+            yield { type: 'text-delta', index: 0, text: '{"verdict":"ok","confidence":0.9,"reason":"正常"}' };
+            yield { type: 'finish', reason: { kind: 'stop' } };
+          })();
+        },
+      },
+      agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm' }) },
+    },
+  });
+  const r = await ai.judgeMessage({ gid: 'g1', uid: 'u1', text: '今天天气不错' });
+  assert.equal(r.ok, true);
+  assert.equal(typeof seen.system, 'string');
+  assert.equal(seen.messages.length, 1);
+  assert.equal(seen.messages[0].role, 'user');
+  assert.ok(Array.isArray(seen.messages[0].content));
+  assert.equal(seen.messages[0].content[0].type, 'text');
+  assert.equal(seen.reasoningEffort, 'low');
+  cleanup();
+});
+
+test('DSH 通道：适配器失败时返回错误码而不是“返回为空”', async () => {
+  const { store, cleanup } = makeStore(AI_ON);
+  const ai = new AiGuard({
+    store,
+    logger: console,
+    dsh: {
+      llm: {
+        stream: () => (async function* gen() {
+          yield { type: 'finish', reason: { kind: 'error', failure: { code: 'MISSING_CREDENTIAL', message: '未配置密钥' } } };
+        })(),
+      },
+      agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm' }) },
+    },
+  });
+  const r = await ai.judgeMessage({ gid: 'g1', uid: 'u1', text: '扫码进群领福利' });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'AI_ERROR');
+  assert.match(String(r.error), /MISSING_CREDENTIAL/u);
+  cleanup();
 });
 
 test('DSH 接入：读取默认模型、判定并缓存', async () => {

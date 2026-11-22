@@ -897,10 +897,11 @@ function renderGroups(el) {
     <div class="card">
       <h3>成员查询与操作</h3>
       <div class="row">
-        <select id="mem-gid" class="grow">${groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name || g.gid)}</option>`).join('')}</select>
+        <select id="mem-gid" class="grow"><option value="">全部群</option>${groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name || g.gid)}</option>`).join('')}</select>
         <input id="mem-q" class="grow" placeholder="按昵称/openid 搜索" value="${esc(state.memberQuery)}">
         <button id="mem-search" class="btn">搜索</button>
       </div>
+      <p class="hint" style="margin-top:8px">成员台账只记录机器人见过的成员（入群申请、群消息）。查不到时可以先选“全部群”，或者改用 openid 搜索。</p>
       <div id="mem-list" class="list" style="margin-top:10px"><div class="empty">输入关键词后搜索</div></div>
     </div>`;
 
@@ -1133,13 +1134,15 @@ function renderSettings(el) {
       <h3>变更通知对象 <span class="sub">仅普通管理员修改时 @</span></h3>
       <div class="grid cols-2">
         <label class="field"><span>通知对象昵称（必填）</span><input id="s-notify-name" value="${esc(s.panel.notifyName)}" placeholder="例如：群主昵称" ${disabledAttr(ro)}></label>
-        <label class="field"><span>对应 QQ 号 / openid（必填）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="与昵称必须属于同一位成员" ${disabledAttr(ro)}></label>
+        <label class="field"><span>成员 openid（可留空）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="不知道就留空；同名时再填" ${disabledAttr(ro)}></label>
       </div>
+      <label class="field"><span>从成员列表选择（自动填入昵称与 openid）</span>
+        <select id="s-notify-member" ${disabledAttr(ro)}><option value="">加载中…</option></select></label>
       <div class="row" style="margin-top:2px">
         <button id="s-notify-check" class="btn">验证通知对象</button>
         <span id="s-notify-result" class="hint"></span>
       </div>
-      <p class="hint">昵称和 QQ 号（openid）必须同时匹配同一位成员才会 @ 他；任一不匹配就只发日志、不 @。@ 仅在普通管理员修改机器人级设置时生效。</p>
+      <p class="hint">QQ 官方 Bot API 只提供成员 openid，不提供 QQ 号，所以无法按 QQ 号查人。留空 openid 时按昵称匹配：群内该昵称唯一就 @ 他；有同名成员则需要补 openid 或从上面列表选人。@ 仅在普通管理员修改机器人级设置时生效。</p>
     </div>
 
     <div class="card">
@@ -1164,6 +1167,9 @@ function renderSettings(el) {
 
     <div class="card">
       <h3>AI 辅助审核 <span class="sub">本地词表的补充，模型失败自动回退</span></h3>
+      <p class="hint" style="margin-bottom:10px;line-height:1.8">
+        新手这样填：① 已经装好 dsh 模型 → 选「DSH 当前会话模型」，不用填其他；② 想用其他厂商 → 选「OpenAI 兼容接口」，点“快速选择厂商”，再填 API Key；③ 保存后点“测试当前模型”，能看到判定结果就说明配通了。
+      </p>
       <div class="row">
         <label class="check"><input id="ai-enabled" type="checkbox" ${ai.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用 AI 审核</label>
         <label class="check"><input id="ai-vision" type="checkbox" ${aiVision.enabled ? 'checked' : ''} ${disabledAttr(ro)}>分析图片（需视觉模型）</label>
@@ -1178,19 +1184,20 @@ function renderSettings(el) {
             <option value="dsh" ${ai.provider === 'dsh' ? 'selected' : ''}>DSH 当前会话模型</option>
             <option value="openai" ${ai.provider === 'openai' ? 'selected' : ''}>OpenAI 兼容接口</option>
           </select></label>
-        <label class="field"><span>快速选择厂商（自动填地址与模型）</span>
+        <label class="field" id="ai-preset-field"><span>快速选择厂商（自动填地址与模型）</span>
           <select id="ai-preset" ${disabledAttr(ro)}>
             ${AI_PRESETS.map((p) => `<option value="${p.id}">${esc(p.label)}</option>`).join('')}
           </select></label>
-        <label class="field"><span>模型名称</span><input id="ai-model" value="${esc(ai.model || '')}" placeholder="deepseek-chat / qwen-plus / glm-4-flash" ${disabledAttr(ro)}></label>
+        <label class="field" id="ai-model-field"><span>模型名称</span><input id="ai-model" value="${esc(ai.model || '')}" placeholder="deepseek-chat / qwen-plus / glm-4-flash" ${disabledAttr(ro)}></label>
       </div>
+      <div id="ai-dsh-note" class="hint" style="display:none;margin:6px 0 10px">API Key：你无需进行配置，因为已绑定了 DSH 模型。</div>
       <div class="grid cols-2">
-        <label class="field"><span>接口地址（OpenAI 兼容，通常以 /v1 结尾）</span><input id="ai-base" value="${esc(ai.baseUrl || '')}" placeholder="https://api.deepseek.com/v1" ${disabledAttr(ro)}></label>
-        <label class="field"><span>API Key（留空不修改；本地模型可留空）</span><input id="ai-key" type="password" placeholder="${ai.apiKeySet ? '已设置，留空不变' : '填写厂商密钥'}" ${disabledAttr(ro)}></label>
+        <label class="field" id="ai-base-field"><span>接口地址（OpenAI 兼容，通常以 /v1 结尾）</span><input id="ai-base" value="${esc(ai.baseUrl || '')}" placeholder="https://api.deepseek.com/v1" ${disabledAttr(ro)}></label>
+        <label class="field" id="ai-key-field"><span>API Key（留空不修改；本地模型可留空）</span><input id="ai-key" type="password" placeholder="${ai.apiKeySet ? '已设置，留空不变' : '填写厂商密钥'}" ${disabledAttr(ro)}></label>
       </div>
       <div class="grid cols-3">
         <label class="field"><span>超时（毫秒）</span><input id="ai-timeout" type="number" min="1000" max="60000" value="${Number(ai.timeoutMs) || 8000}" ${disabledAttr(ro)}></label>
-        <label class="field"><span>最大输出 tokens</span><input id="ai-tokens" type="number" min="32" max="2000" value="${Number(ai.maxTokens) || 300}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>最大输出 tokens</span><input id="ai-tokens" type="number" min="32" max="2000" value="${Number(ai.maxTokens) || 512}" ${disabledAttr(ro)}></label>
         <label class="field"><span>最低置信度（0-1）</span><input id="ai-minconf" type="number" min="0" max="1" step="0.05" value="${ai.minConfidence == null ? 0.7 : ai.minConfidence}" ${disabledAttr(ro)}></label>
       </div>
       <div class="row" style="gap:16px">
@@ -1296,8 +1303,8 @@ function renderSettings(el) {
     const name = $('s-notify-name').value.trim();
     const uid = $('s-notify-uid').value.trim();
     const out = $('s-notify-result');
-    if (!name || !uid) {
-      out.textContent = '两项都填写后才能验证';
+    if (!name) {
+      out.textContent = '请填写昵称';
       out.style.color = 'var(--warn)';
       return null;
     }
@@ -1309,10 +1316,15 @@ function renderSettings(el) {
     }
     const d = r.data || {};
     if (d.matched) {
-      out.textContent = `已匹配：${d.nickname}（${d.source === 'api' ? '官方昵称校验' : '成员台账'}）`;
+      const src = d.source === 'api' ? '官方昵称校验' : d.source === 'name' ? '按昵称唯一匹配' : '成员台账';
+      out.textContent = `已匹配：${d.nickname}（${src}）`;
       out.style.color = 'var(--ok)';
     } else {
-      out.textContent = d.reason || '未匹配';
+      let text = d.reason || '未匹配';
+      if (Array.isArray(d.candidates) && d.candidates.length) {
+        text += '；可选：' + d.candidates.map((c) => `${c.name || '未命名'}=${c.uid}`).join('、');
+      }
+      out.textContent = text;
       out.style.color = 'var(--bad)';
     }
     if (!silent) toast(d.matched ? '通知对象验证通过' : (d.reason || '通知对象未匹配'), !d.matched);
@@ -1320,12 +1332,47 @@ function renderSettings(el) {
   };
   $('s-notify-check').addEventListener('click', () => { void verifyNotify(false); });
 
+  // 成员列表：选中后自动填入昵称与 openid，免去手动找 openid
+  void (async () => {
+    const sel = $('s-notify-member');
+    if (!sel) return;
+    const r = await req('/members?gid=&q=');
+    if (!r.ok) {
+      sel.innerHTML = '<option value="">成员列表加载失败</option>';
+      return;
+    }
+    const list = r.data.members || [];
+    const opts = list.map((m) => {
+      const label = `${m.name || '(无昵称)'} · ${m.gid} · ${m.uid}`;
+      const value = JSON.stringify({ name: m.name || '', uid: m.uid });
+      return `<option value="${esc(value)}">${esc(label)}</option>`;
+    }).join('');
+    sel.innerHTML = '<option value="">选择成员（自动填昵称与 openid）</option>'
+      + (opts || '<option value="">暂无成员（让他在群里发言后刷新）</option>');
+  })();
+  $('s-notify-member').addEventListener('change', () => {
+    const raw = $('s-notify-member').value;
+    if (!raw) return;
+    try {
+      const picked = JSON.parse(raw);
+      $('s-notify-name').value = picked.name || '';
+      $('s-notify-uid').value = picked.uid || '';
+      $('s-notify-result').textContent = '已填入，可以点“验证通知对象”';
+    } catch { /* ignore */ }
+  });
+
   const syncAiProvider = () => {
     const dsh = $('ai-provider').value === 'dsh';
     for (const id of ['ai-base', 'ai-key', 'ai-model', 'ai-preset']) {
       const node = $(id);
       if (node) node.disabled = dsh;
     }
+    for (const id of ['ai-preset-field', 'ai-model-field', 'ai-base-field', 'ai-key-field']) {
+      const node = $(id);
+      if (node) node.style.display = dsh ? 'none' : '';
+    }
+    const note = $('ai-dsh-note');
+    if (note) note.style.display = dsh ? '' : 'none';
   };
   $('ai-provider').addEventListener('change', syncAiProvider);
   $('ai-preset').addEventListener('change', () => {
@@ -1367,14 +1414,14 @@ function renderSettings(el) {
     s.panel.port = Number($('s-port').value);
     const notifyName = $('s-notify-name').value.trim();
     const notifyUid = $('s-notify-uid').value.trim();
-    if ((notifyName && !notifyUid) || (!notifyName && notifyUid)) {
-      return toast('通知对象的昵称和 QQ 号必须同时填写', true);
+    if (!notifyName && notifyUid) {
+      return toast('填写 openid 时请同时填写昵称', true);
     }
     var pendingVerify = false;
-    if (notifyName && notifyUid) {
+    if (notifyName) {
       const verified = await verifyNotify(true);
       if (verified && verified.matched === false && verified.definite) {
-        return toast(verified.reason || '通知对象昵称与 openid 不匹配，已阻止保存', true);
+        return toast(verified.reason || '通知对象校验未通过，已阻止保存', true);
       }
       pendingVerify = !!(verified && verified.matched === false);
     }

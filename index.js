@@ -188,22 +188,31 @@ function createRuntime(ctx, config, logger) {
       ...(Array.isArray(info?.summary) ? info.summary : []),
     ].filter(Boolean).join('\n').slice(0, LIMITS.notifyMaxChars);
     void (async () => {
-      // @ 仅对普通管理员生效；昵称与 openid 必须同时匹配同一位成员。
-      // 台账里没有记录时（成员没发过言 / 台账被裁剪），再用官方昵称接口兜底校验一次。
+      // @ 仅对普通管理员生效；有 openid 时要求昵称与 openid 同时匹配。
+      // 没填 openid 时按昵称匹配：群内该昵称唯一才会 @，同名则不猜。
       let apiVerified;
       const resolveTarget = async (gid) => {
-        if (info?.role !== 'operator' || !notifyName || !notifyUid) return '';
-        const member = store.findMemberByUidAndName(gid, notifyUid, notifyName);
-        if (member) return member.uid;
-        if (apiVerified === undefined) {
-          const r = await client.getUserInfo?.(notifyUid);
-          const nickname = String(r?.ok ? (r.data?.username || r.data?.nickname || '') : '').trim();
-          apiVerified = !!nickname && nickname.toLowerCase() === notifyName.toLowerCase();
-          if (!apiVerified) {
-            logger.warn?.(`[qqbot-guard] 通知对象未通过校验：昵称「${notifyName}」与 openid 对应的官方昵称「${nickname || '未知'}」不一致`);
+        if (info?.role !== 'operator' || !notifyName) return '';
+        if (notifyUid) {
+          const member = store.findMemberByUidAndName(gid, notifyUid, notifyName);
+          if (member) return member.uid;
+          if (apiVerified === undefined) {
+            const r = await client.getUserInfo?.(notifyUid);
+            const nickname = String(r?.ok ? (r.data?.username || r.data?.nickname || '') : '').trim();
+            apiVerified = !!nickname && nickname.normalize('NFKC').toLowerCase() === notifyName.normalize('NFKC').toLowerCase();
+            if (!apiVerified) {
+              logger.warn?.(`[qqbot-guard] 通知对象未通过校验：昵称「${notifyName}」与 openid 对应的官方昵称「${nickname || '未知'}」不一致`);
+            }
           }
+          return apiVerified ? notifyUid : '';
         }
-        return apiVerified ? notifyUid : '';
+        const list = store.findMembersByName(gid, notifyName);
+        const uids = new Set(list.map((x) => x.uid));
+        if (uids.size === 1) return list[0].uid;
+        if (uids.size > 1) {
+          logger.warn?.(`[qqbot-guard] 群 ${gid} 里有 ${uids.size} 位同名成员「${notifyName}」，跳过 @`);
+        }
+        return '';
       };
       for (const gid of groups) {
         try {

@@ -907,6 +907,9 @@ window.__ModuleLoader__.load({
       var gidState = useState(groups[0] ? groups[0].gid : '');
       var gid = gidState[0];
       var setGid = gidState[1];
+      var memberGidState = useState(groups[0] ? groups[0].gid : '');
+      var memberGid = memberGidState[0];
+      var setMemberGid = memberGidState[1];
       var addState = useState({ gid: '', name: '' });
       var add = addState[0];
       var setAdd = addState[1];
@@ -940,7 +943,7 @@ window.__ModuleLoader__.load({
 
       async function search() {
         setBusy('search');
-        var r = await api('members?gid=' + encodeURIComponent(gid) + '&q=' + encodeURIComponent(q));
+        var r = await api('members?gid=' + encodeURIComponent(memberGid) + '&q=' + encodeURIComponent(q));
         setBusy('');
         if (r.ok) setMembers(r.data.members || []);
         else props.notify((r.error && r.error.message) || '查询失败', true);
@@ -1053,13 +1056,15 @@ window.__ModuleLoader__.load({
           h('div', { className: 'qqg-row' },
             h(Field, { label: '群' },
               h(Select, {
-                value: gid, onChange: setGid,
-                options: groups.map(function (g) { return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid }; }),
+                value: memberGid, onChange: setMemberGid,
+                options: [{ value: '', label: '全部群' }].concat(groups.map(function (g) {
+                  return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid };
+                })),
                 style: { minWidth: 240 },
               })),
             h(Field, { label: '搜索（昵称 / openid）' }, h(TextInput, { value: q, onChange: setQ })),
             h(Btn, { disabled: busy === 'search', onClick: search }, busy === 'search' ? '查询中…' : '查询')),
-          h('div', { className: 'qqg-note' }, '成员台账只记录机器人见过的成员（入群申请、群消息）。QQ 官方暂未开放“全量成员列表”接口。'),
+          h('div', { className: 'qqg-note' }, '成员台账只记录机器人见过的成员（入群申请、群消息）。查不到时可以先选“全部群”，或者改用 openid 搜索。'),
           members.length
             ? h('div', { className: 'qqg-table-wrap' }, h('table', { className: 'qqg-table' },
               h('thead', null, h('tr', null, h('th', null, '昵称'), h('th', null, 'openid'), h('th', null, '最近活跃'), h('th', null, '操作'))),
@@ -1284,7 +1289,15 @@ window.__ModuleLoader__.load({
       var aiPresetState = useState('');
       var aiPreset = aiPresetState[0];
       var setAiPreset = aiPresetState[1];
+      var notifyMembersState = useState([]);
+      var notifyMembers = notifyMembersState[0];
+      var setNotifyMembers = notifyMembersState[1];
       useEffect(function () { setDraft(boot.settings || {}); }, [boot.settings]);
+      useEffect(function () {
+        api('members?gid=&q=').then(function (r) {
+          if (r && r.ok) setNotifyMembers(r.data.members || []);
+        });
+      }, []);
 
       function set(path, value) { setDraft(setIn(draft, path, value)); }
       function setAi(values) {
@@ -1298,9 +1311,9 @@ window.__ModuleLoader__.load({
       async function verifyNotify(silent) {
         var name = String(draft.panel.notifyName || '').trim();
         var uid = String(draft.panel.notifyOpenid || '').trim();
-        if (!name || !uid) {
-          setVerify({ matched: false, reason: '两项都填写后才能验证' });
-          if (!silent) props.notify('两项都填写后才能验证', true);
+        if (!name) {
+          setVerify({ matched: false, reason: '请填写昵称' });
+          if (!silent) props.notify('请填写昵称', true);
           return null;
         }
         var r = await api('notify/verify', { name: name, uid: uid });
@@ -1317,9 +1330,9 @@ window.__ModuleLoader__.load({
       async function save() {
         var name = String(draft.panel.notifyName || '').trim();
         var uid = String(draft.panel.notifyOpenid || '').trim();
-        if ((name && !uid) || (!name && uid)) return props.notify('通知对象的昵称和 QQ 号必须同时填写', true);
+        if (!name && uid) return props.notify('填写 openid 时请同时填写昵称', true);
         var pendingVerify = false;
-        if (name && uid) {
+        if (name) {
           var v = await verifyNotify(true);
           if (v && v.matched === false && v.definite) {
             return props.notify(v.reason || '通知对象昵称与 openid 不匹配，已阻止保存', true);
@@ -1423,13 +1436,31 @@ window.__ModuleLoader__.load({
       var verifyTone = 'off';
       if (verify) {
         if (verify.matched) {
-          verifyText = '已匹配：' + verify.nickname + '（' + (verify.source === 'api' ? '官方昵称校验' : '成员台账') + '）';
+          var srcLabel = verify.source === 'api' ? '官方昵称校验'
+            : verify.source === 'name' ? '按昵称唯一匹配' : '成员台账';
+          verifyText = '已匹配：' + verify.nickname + '（' + srcLabel + '）';
           verifyTone = 'ok';
         } else {
           verifyText = verify.reason || '未匹配';
+          if (Array.isArray(verify.candidates) && verify.candidates.length) {
+            verifyText += '；可选：' + verify.candidates.map(function (c) {
+              return (c.name || '未命名') + '=' + c.uid;
+            }).join('、');
+          }
           verifyTone = 'bad';
         }
       }
+
+      var notifySeen = {};
+      var notifyOptions = [{ value: '', label: '选择成员（自动填昵称与 openid）' }];
+      notifyMembers.forEach(function (m) {
+        if (!m || !m.uid || notifySeen[m.uid]) return;
+        notifySeen[m.uid] = true;
+        notifyOptions.push({
+          value: JSON.stringify({ name: m.name || '', uid: m.uid }),
+          label: (m.name || '(无昵称)') + ' · ' + m.uid,
+        });
+      });
 
       return h('div', null,
         h('div', { className: 'qqg-card' },
@@ -1455,16 +1486,31 @@ window.__ModuleLoader__.load({
                 placeholder: '例如：群主昵称',
                 onChange: function (v) { set('panel.notifyName', v); setVerify(null); },
               })),
-            h(Field, { label: '对应 QQ 号 / openid（必填）' },
+            h(Field, { label: '成员 openid（可留空）' },
               h(TextInput, {
                 value: draft.panel.notifyOpenid || '',
-                placeholder: '与昵称必须属于同一位成员',
+                placeholder: '不知道就留空；同名时再填',
                 onChange: function (v) { set('panel.notifyOpenid', v); setVerify(null); },
+              })),
+            h(Field, { label: '从成员列表选择（自动填入）' },
+              h(Select, {
+                value: '',
+                onChange: function (v) {
+                  if (!v) return;
+                  try {
+                    var picked = JSON.parse(v);
+                    var next = setIn(draft, 'panel.notifyName', picked.name || '');
+                    next = setIn(next, 'panel.notifyOpenid', picked.uid || '');
+                    setDraft(next);
+                    setVerify(null);
+                  } catch (e) { /* ignore */ }
+                },
+                options: notifyOptions,
               }))),
           h('div', { className: 'qqg-row', style: { marginTop: 2 } },
             h(Btn, { onClick: function () { void verifyNotify(false); } }, '验证通知对象'),
             verifyText ? h('span', { className: 'qqg-pill', 'data-t': verifyTone }, verifyText) : null),
-          h('p', { className: 'qqg-hint' }, '昵称和 QQ 号（openid）必须同时匹配同一位成员才会 @ 他；任一不匹配就只发日志、不 @。@ 仅在普通管理员修改机器人级设置时生效。')),
+          h('p', { className: 'qqg-hint' }, 'QQ 官方 Bot API 只提供成员 openid，不提供 QQ 号，所以无法按 QQ 号查人。留空 openid 时按昵称匹配：群内该昵称唯一就 @ 他；有同名成员则需要补 openid 或从上面列表选人。@ 仅在普通管理员修改机器人级设置时生效。')),
         h('div', { className: 'qqg-card' },
           h('h4', null, '局域网面板'),
           h('div', { className: 'qqg-row' },
@@ -1517,6 +1563,8 @@ window.__ModuleLoader__.load({
               className: 'qqg-pill',
               'data-t': boot.ai && boot.ai.vision && boot.ai.vision.ready ? 'ok' : 'off',
             }, boot.ai && boot.ai.vision && boot.ai.vision.ready ? '可读图' : '图片分析不可用')),
+          h('p', { className: 'qqg-hint', style: { marginBottom: 10, lineHeight: 1.8 } },
+            '新手这样填：① 已经装好 dsh 模型 → 选「DSH 当前会话模型」，不用填其他；② 想用其他厂商 → 选「OpenAI 兼容接口」，点“快速选择厂商”，再填 API Key；③ 保存后点“测试当前模型”，能看到判定结果就说明配通了。'),
           h('div', { className: 'qqg-row', style: { marginTop: 8 } },
             h(Field, { label: '接入方式' },
               h(Select, {
@@ -1527,48 +1575,52 @@ window.__ModuleLoader__.load({
                   { value: 'openai', label: 'OpenAI 兼容接口' },
                 ],
               })),
-            h(Field, { label: '快速选择厂商（自动填地址与模型）' },
-              h(Select, {
-                value: aiPreset,
-                onChange: function (v) {
-                  setAiPreset(v);
-                  var p = null;
-                  for (var i = 0; i < AI_PRESETS.length; i += 1) {
-                    if (AI_PRESETS[i].id === v) p = AI_PRESETS[i];
-                  }
-                  if (!p) return;
-                  if (p.id === 'dsh') setAi({ provider: 'dsh' });
-                  else setAi({ provider: 'openai', baseUrl: p.baseUrl, model: p.model });
-                },
-                options: [{ value: '', label: '选择厂商…' }].concat(AI_PRESETS.map(function (p) {
-                  return { value: p.id, label: p.label };
+            draft.ai.provider === 'openai'
+              ? h(Field, { label: '快速选择厂商（自动填地址与模型）' },
+                h(Select, {
+                  value: aiPreset,
+                  onChange: function (v) {
+                    setAiPreset(v);
+                    var p = null;
+                    for (var i = 0; i < AI_PRESETS.length; i += 1) {
+                      if (AI_PRESETS[i].id === v) p = AI_PRESETS[i];
+                    }
+                    if (!p) return;
+                    if (p.id === 'dsh') setAi({ provider: 'dsh' });
+                    else setAi({ provider: 'openai', baseUrl: p.baseUrl, model: p.model });
+                  },
+                  options: [{ value: '', label: '选择厂商…' }].concat(AI_PRESETS.map(function (p) {
+                    return { value: p.id, label: p.label };
+                  })),
+                }))
+              : null,
+            draft.ai.provider === 'openai'
+              ? h(Field, { label: '模型名称' },
+                h(TextInput, {
+                  value: draft.ai.model || '',
+                  placeholder: 'deepseek-chat / qwen-plus / glm-4-flash',
+                  onChange: function (v) { setAi({ model: v }); },
+                }))
+              : null),
+          draft.ai.provider === 'dsh'
+            ? h('div', { className: 'qqg-hint', style: { margin: '4px 0 10px' } },
+              'API Key：你无需进行配置，因为已绑定了 DSH 模型。')
+            : h('div', { className: 'qqg-row' },
+              h(Field, { label: '接口地址（OpenAI 兼容，通常以 /v1 结尾）' },
+                h(TextInput, {
+                  value: draft.ai.baseUrl || '',
+                  placeholder: 'https://api.deepseek.com/v1',
+                  onChange: function (v) { setAi({ baseUrl: v }); },
+                  style: { minWidth: 320 },
                 })),
-              })),
-            h(Field, { label: '模型名称' },
-              h(TextInput, {
-                value: draft.ai.model || '',
-                disabled: draft.ai.provider === 'dsh',
-                placeholder: 'deepseek-chat / qwen-plus / glm-4-flash',
-                onChange: function (v) { setAi({ model: v }); },
-              }))),
-          h('div', { className: 'qqg-row' },
-            h(Field, { label: '接口地址（OpenAI 兼容，通常以 /v1 结尾）' },
-              h(TextInput, {
-                value: draft.ai.baseUrl || '',
-                disabled: draft.ai.provider === 'dsh',
-                placeholder: 'https://api.deepseek.com/v1',
-                onChange: function (v) { setAi({ baseUrl: v }); },
-                style: { minWidth: 320 },
-              })),
-            h(Field, { label: 'API Key（留空不修改；本地模型可留空）' },
-              h(TextInput, {
-                value: aiKey,
-                type: 'password',
-                disabled: draft.ai.provider === 'dsh',
-                placeholder: draft.ai.apiKeySet ? '已设置，留空不变' : '填写厂商密钥',
-                onChange: setAiKey,
-                style: { minWidth: 260 },
-              }))),
+              h(Field, { label: 'API Key（留空不修改；本地模型可留空）' },
+                h(TextInput, {
+                  value: aiKey,
+                  type: 'password',
+                  placeholder: draft.ai.apiKeySet ? '已设置，留空不变' : '填写厂商密钥',
+                  onChange: setAiKey,
+                  style: { minWidth: 260 },
+                }))),
           h('div', { className: 'qqg-row' },
             h(Field, { label: '超时（毫秒）' },
               h(NumberInput, { value: draft.ai.timeoutMs, min: 1000, max: 60000, onChange: function (v) { setAi({ timeoutMs: v }); } })),
