@@ -633,7 +633,7 @@ function renderModeration(el) {
         <button id="trusted-search" class="btn">搜索</button>
       </div>
       <div id="trusted-results" class="list" style="margin-top:8px"></div>
-      <p class="hint">搜不到时，让该成员先在群里发一句话。</p>`}
+      <p class="hint">openid 是按群区分的：请添加「你要管理的那个群」里的成员；搜不到时，让该成员先在该群发一句话。</p>`}
     </div>
 
     <div class="row" style="margin-top:14px">
@@ -881,12 +881,18 @@ function paintMemberResults(el, members, onPick, actionLabel = '选择') {
   el.innerHTML = members.map((m, i) => `
     <div class="item"><div class="main">
       <div class="title">${esc(m.name || '(无昵称)')}${m.pending ? ' <span class="pill warn">待审批</span>' : ''}</div>
-      <div class="meta mono">${esc(m.gid)} · ${esc(m.uid)}</div>
+      <div class="meta mono">${esc(groupNameOf(m.gid))} · ${esc(m.uid)}</div>
     </div><button class="btn" data-pick="${i}">${esc(actionLabel)}</button></div>`).join('')
     || '<div class="empty">没有匹配成员；让他先在群里发一句话</div>';
   for (const btn of el.querySelectorAll('[data-pick]')) {
     btn.addEventListener('click', () => onPick(members[Number(btn.dataset.pick)]));
   }
+}
+
+/** gid → 群名；拿不到群名时退回 gid，避免搜索结果看不懂 */
+function groupNameOf(gid) {
+  const g = state.boot?.groups?.[gid];
+  return g?.name || String(gid || '-');
 }
 
 function renderGroups(el) {

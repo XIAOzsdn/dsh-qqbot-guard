@@ -21,10 +21,47 @@ test('@机器人检测：事件类型 / mentions / 正文标签三种方式', ()
   assert.equal(detectMentionsBot({
     rawEventType: 'GROUP_MESSAGE_CREATE', content: '帮我看看', mentions: [{ is_you: true }],
   }, 'app1'), true);
+  assert.equal(detectMentionsBot({
+    rawEventType: 'GROUP_MESSAGE_CREATE', content: '帮我看看', mentions: [{ bot: true }],
+  }, 'app1'), true);
   assert.equal(detectMentionsBot({ rawEventType: 'GROUP_MESSAGE_CREATE', content: '<@!app1> 帮我看看' }, 'app1'), true);
   assert.equal(detectMentionsBot({
     rawEventType: 'GROUP_MESSAGE_CREATE', content: '随便聊聊', mentions: [{ is_you: false }],
   }, 'app1'), false);
+});
+
+test('非信任成员发管理指令会收到无权限提示', async () => {
+  const { store, cleanup } = makeStore();
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '<@!app1> 看看群里有多少人', mentionsBot: true,
+  });
+  assert.equal(r.handled, true);
+  assert.equal(r.action, 'natural-denied');
+  assert.ok(sent[0].includes('u9'));
+  assert.ok(sent[0].includes('不是信任成员'));
+  cleanup();
+});
+
+test('信任成员即使 @ 标签被清洗也能触发指令', async () => {
+  const { store, cleanup } = makeStore({
+    moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
+  });
+  const sent = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    getGroupInfo: async () => ({ ok: true, data: { group_member_num: 8 } }),
+  };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '<@!unknown> 看看群里有多少人', mentionsBot: false,
+  });
+  assert.equal(r.handled, true);
+  assert.equal(r.action, 'natural-count');
+  assert.ok(sent[0].includes('8'));
+  cleanup();
 });
 
 test('自然语言解析：人数 / 踢人拉黑 / 禁言 / 解禁 / 查询', () => {
@@ -142,6 +179,71 @@ test('信任成员 @ 机器人 才会触发自然语言指令', async () => {
   const stranger = await mod.handleMessage({
     gid: 'g1', uid: 'u9', name: '路人', text: '<@!app1> 看看群里有多少人', mentionsBot: true,
   });
-  assert.equal(stranger.handled, false);
+  assert.equal(stranger.handled, true);
+  assert.equal(stranger.action, 'natural-denied');
+  assert.ok(sent[sent.length - 1].includes('不是信任成员'));
+  cleanup();
+});
+
+test('信任成员没有 @ 标签也能执行明确的管理指令', async () => {
+  const { store, cleanup } = makeStore({
+    moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
+  });
+  const sent = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    getGroupInfo: async () => ({ ok: true, data: { group_member_num: 9 } }),
+  };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '群里有多少人', mentionsBot: false,
+  });
+  assert.equal(r.handled, true);
+  assert.equal(r.action, 'natural-count');
+  assert.ok(sent[0].includes('9'));
+  cleanup();
+});
+
+test('非信任成员只 @ 不说话也必须回复 openid', async () => {
+  const { store, cleanup } = makeStore();
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '', mentionsBot: true,
+  });
+  assert.equal(r.handled, true);
+  assert.equal(r.action, 'natural-denied');
+  assert.ok(sent[0].includes('u9'));
+  cleanup();
+});
+
+test('自然语言开关关闭时 @ 机器人有明确提示', async () => {
+  const { store, cleanup } = makeStore({ commands: { naturalEnabled: false } });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '查一下人数', mentionsBot: true,
+  });
+  assert.equal(r.handled, true);
+  assert.equal(r.action, 'natural-disabled');
+  assert.ok(sent[0].includes('已在面板关闭'));
+  cleanup();
+});
+
+test('回复发送失败会写入审计，便于定位“无回复”', async () => {
+  const { store, cleanup } = makeStore();
+  const client = {
+    sendGroupText: async () => ({ ok: false, err: { code: '304036', human: '没有 Markdown 权限' } }),
+  };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '查一下人数', mentionsBot: true,
+  });
+  assert.equal(r.action, 'natural-denied');
+  const hit = store.readAudit(20).find((x) => x.action === 'reply-failed');
+  assert.ok(hit);
+  assert.equal(hit.code, '304036');
   cleanup();
 });
