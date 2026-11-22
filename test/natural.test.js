@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { Moderation } from '../lib/moderation.js';
+import { detectMentionsBot } from '../lib/bot.js';
 import { parseNaturalIntent, handleNaturalCommand } from '../lib/natural.js';
 
 function makeStore(settings = {}) {
@@ -14,6 +15,17 @@ function makeStore(settings = {}) {
   store.saveSettings(settings);
   return { store, dir, cleanup: () => { store.dispose(); rmSync(dir, { recursive: true, force: true }); } };
 }
+
+test('@机器人检测：事件类型 / mentions / 正文标签三种方式', () => {
+  assert.equal(detectMentionsBot({ rawEventType: 'GROUP_AT_MESSAGE_CREATE', content: '' }, 'app1'), true);
+  assert.equal(detectMentionsBot({
+    rawEventType: 'GROUP_MESSAGE_CREATE', content: '帮我看看', mentions: [{ is_you: true }],
+  }, 'app1'), true);
+  assert.equal(detectMentionsBot({ rawEventType: 'GROUP_MESSAGE_CREATE', content: '<@!app1> 帮我看看' }, 'app1'), true);
+  assert.equal(detectMentionsBot({
+    rawEventType: 'GROUP_MESSAGE_CREATE', content: '随便聊聊', mentions: [{ is_you: false }],
+  }, 'app1'), false);
+});
 
 test('自然语言解析：人数 / 踢人拉黑 / 禁言 / 解禁 / 查询', () => {
   assert.equal(parseNaturalIntent('帮我看看群里有多少人？').action, 'count');
