@@ -16,15 +16,24 @@ function makeStore(settings = {}) {
   return { store, dir, cleanup: () => { store.dispose(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test('@机器人检测：事件类型 / mentions / 正文标签三种方式', () => {
+test('@机器人检测：SDK 判定 / 事件类型 / is_you / 正文标签', () => {
+  assert.equal(detectMentionsBot({ rawEventType: 'GROUP_MESSAGE_CREATE' }, 'app1', true), true);
   assert.equal(detectMentionsBot({ rawEventType: 'GROUP_AT_MESSAGE_CREATE', content: '' }, 'app1'), true);
   assert.equal(detectMentionsBot({
     rawEventType: 'GROUP_MESSAGE_CREATE', content: '帮我看看', mentions: [{ is_you: true }],
   }, 'app1'), true);
+  // 官方语义：mentions 不含机器人自身；只看 bot=true 会在多机器人同群时误响应
   assert.equal(detectMentionsBot({
     rawEventType: 'GROUP_MESSAGE_CREATE', content: '帮我看看', mentions: [{ bot: true }],
-  }, 'app1'), true);
+  }, 'app1'), false);
+  assert.equal(detectMentionsBot({
+    rawEventType: 'GROUP_MESSAGE_CREATE', content: '帮我看看', mentions: [{ member_openid: 'app1' }],
+  }, 'app1'), false);
   assert.equal(detectMentionsBot({ rawEventType: 'GROUP_MESSAGE_CREATE', content: '<@!app1> 帮我看看' }, 'app1'), true);
+  assert.equal(detectMentionsBot({ rawEventType: 'GROUP_MESSAGE_CREATE', content: '<@app1> 帮我看看' }, 'app1'), true);
+  assert.equal(detectMentionsBot({
+    rawEventType: 'GROUP_MESSAGE_CREATE', content: '<qqbot-at-user id="app1" /> 帮我看看',
+  }, 'app1'), true);
   assert.equal(detectMentionsBot({
     rawEventType: 'GROUP_MESSAGE_CREATE', content: '随便聊聊', mentions: [{ is_you: false }],
   }, 'app1'), false);
@@ -45,7 +54,7 @@ test('非信任成员发管理指令会被普通用户通道拦截并警告', as
   cleanup();
 });
 
-test('信任成员即使 @ 标签被清洗也能触发指令', async () => {
+test('信任成员即使正文 @ 标签被清洗，只要平台给了 @ 信号仍能触发', async () => {
   const { store, cleanup } = makeStore({
     moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
   });
@@ -56,7 +65,7 @@ test('信任成员即使 @ 标签被清洗也能触发指令', async () => {
   };
   const mod = new Moderation({ store, getClient: () => client, logger: console });
   const r = await mod.handleMessage({
-    gid: 'g1', uid: 'u1', name: '管理员', text: '<@!unknown> 看看群里有多少人', mentionsBot: false,
+    gid: 'g1', uid: 'u1', name: '管理员', text: '看看群里有多少人', mentionsBot: true,
   });
   assert.equal(r.handled, true);
   assert.equal(r.action, 'natural-count');
@@ -185,7 +194,7 @@ test('信任成员 @ 机器人 才会触发自然语言指令', async () => {
   cleanup();
 });
 
-test('信任成员没有 @ 标签也能执行明确的管理指令', async () => {
+test('信任成员没有 @ 时不会执行任何指令', async () => {
   const { store, cleanup } = makeStore({
     moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
   });
@@ -198,9 +207,8 @@ test('信任成员没有 @ 标签也能执行明确的管理指令', async () =>
   const r = await mod.handleMessage({
     gid: 'g1', uid: 'u1', name: '管理员', text: '群里有多少人', mentionsBot: false,
   });
-  assert.equal(r.handled, true);
-  assert.equal(r.action, 'natural-count');
-  assert.ok(sent[0].includes('9'));
+  assert.equal(r.handled, false);
+  assert.equal(sent.length, 0);
   cleanup();
 });
 

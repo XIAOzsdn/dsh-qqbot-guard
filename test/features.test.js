@@ -109,11 +109,17 @@ test('群指令只有白名单可用', async () => {
   const sent = [];
   const client = { sendGroupText: async (gid, text) => { sent.push(text); return { ok: true }; } };
   const mod = new Moderation({ store, getClient: () => client, logger: console });
-  const ok = await mod.handleMessage({ gid: 'g1', uid: 'admin1', text: '/warn <@u2> 刷屏' });
+  const ok = await mod.handleMessage({ gid: 'g1', uid: 'admin1', text: '/warn <@u2> 刷屏', mentionsBot: true });
   assert.equal(ok.handled, true);
   assert.match(sent[0], /u2/);
-  const denied = await mod.handleMessage({ gid: 'g1', uid: 'u3', text: '/warn <@u2> 刷屏' });
-  assert.equal(denied.handled, false);
+  const denied = await mod.handleMessage({ gid: 'g1', uid: 'u3', text: '/warn <@u2> 刷屏', mentionsBot: true });
+  assert.equal(denied.handled, true);
+  assert.equal(denied.action, 'guest-warn');
+  // 非白名单只会收到越权警告，不会真的执行警告指令
+  assert.ok(!sent[1].includes('u2'));
+  // 没有 @ 机器人时，即使白名单也不执行
+  const noAt = await mod.handleMessage({ gid: 'g1', uid: 'admin1', text: '/warn <@u2> 刷屏', mentionsBot: false });
+  assert.equal(noAt.handled, false);
   cleanup();
 });
 

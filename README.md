@@ -3,7 +3,7 @@
 > 只做群管理：违规防护、入群审批、入群欢迎、入群答题、观察期、公告发布与管理。  
 > 默认不聊天；可选的「普通用户 AI 通道」只在非信任成员 @机器人 时提供受控的轻量闲聊，管理操作一律拦截。
 
-- 当前版本：**v1.5.1**
+- 当前版本：**v1.5.3**
 - 本仓库默认分支：**`main`**
 - 适用宿主：**dsh ≥ 0.2.0-rc.2**
 - 运行时要求：**Node.js ≥ 24.9.0**（dsh 0.2.x 的硬性要求）
@@ -21,7 +21,7 @@
 | 上游原版分支 | `main`（本次重写基于上传包 `dsh-qqbot-main.zip` 的源码） |
 | 本仓库 | [https://github.com/XIAOzsdn/dsh-qqbot-guard](https://github.com/XIAOzsdn/dsh-qqbot-guard) |
 | 本仓库默认分支 | `main` |
-| 本版标签 | `v1.5.1` |
+| 本版标签 | `v1.5.3` |
 | 关系 | 保留原版核心群管理能力，移除 AI 对话/表情包/图片/语音等模块，并对架构、面板、依赖和资源占用做重写 |
 
 ### 与上游同步
@@ -662,6 +662,25 @@ A：默认不会。只有你在「设置 → AI 辅助审核」里主动开启�
 ---
 
 ## 11. 变更记录
+
+### v1.5.3
+
+- **启用 SDK 官方 `mentionGate` 做权威 @ 判定**：以 `passthrough: true` 挂载，只把 `ctx.state.mention.wasMentioned` 交给业务层，不拦截消息，因此成员台账与入群答题仍能收到全部群消息
+- **按官方语义修正 `mentions` 判定**：官方文档明确 `mentions` 不包含机器人自身，因此不再用“mentions 里的 id 等于 appId”判断；同时移除 `bot: true` 兜底，避免多机器人同群时一起响应
+- 保留三级兜底：SDK 判定 → `GROUP_AT_MESSAGE_CREATE` 事件类型 → `is_you` → 正文标签（`<@id>` / `<@!id>` / `<qqbot-at-user id>`）
+- 兼容平台静默把 @ 消息改为 `GROUP_MESSAGE_CREATE` 并附带 `mentions` 的情况
+- 单测 108 项全部通过
+
+### v1.5.2
+
+- **所有通道一律要求真正 @ 机器人**：
+  - 删除“信任成员不 @ 也能执行管理指令”的兜底路径
+  - 删除“正文里恰好有任意 @ 标签就算”的宽松判断
+  - `/warn` `/mute` `/kick` `/rule` `/help` 等指令同样必须 @ 机器人
+  - 普通用户 AI 闲聊通道本来就是 @ 才触发，保持不变
+- **@ 检测按协议端实际字段增强**：事件类型（含 `GROUP_AT_MESSAGE_CREATE`）→ 消息段 `mentions`（`is_you`、`bot`、`id`、`user_openid`、`member_openid`、`openid`、`qq`、`user_id`）→ 正文标签（`<@id>`、`<@!id>`、`<qqbot-at-user id="id">`）
+- 兼容平台静默把 @ 消息改为 `GROUP_MESSAGE_CREATE` 并附带 `mentions` 的情况
+- 单测 108 项全部通过（新增多种 @ 格式与“无 @ 不执行”断言）
 
 ### v1.5.1
 

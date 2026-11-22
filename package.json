@@ -1,6 +1,6 @@
 {
   "name": "dsh-qqbot-guard",
-  "version": "1.5.1",
+  "version": "1.5.3",
   "description": "QQ 群管理插件：违规防护、入群审批、入群欢迎、入群答题、观察期、公告管理、独立局域网控制台，以及受控的普通用户 AI 闲聊通道。",
   "type": "module",
   "private": true,
