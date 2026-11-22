@@ -10,6 +10,7 @@ import { matchRules, Moderation } from '../lib/moderation.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, tickQuizzes } from '../lib/join.js';
 import { AuthStore, LoginGuard, SessionStore, checkPasswordPolicy } from '../lib/auth.js';
 import { isBasicPatch } from '../lib/api.js';
+import { readDeviceInfo } from '../lib/device.js';
 
 function makeStore() {
   const dir = mkdtempSync(join(tmpdir(), 'qqg-feat-'));
@@ -251,4 +252,16 @@ test('通知对象必须昵称与 QQ 号同时匹配', () => {
   assert.equal(store.findMemberByUidAndName('g1', '', '群主'), null);
   assert.equal(store.findMemberByUidAndName('g1', 'u1', ''), null);
   cleanup();
+});
+
+test('设备信息包含版本、CPU 与内存', () => {
+  const d = readDeviceInfo();
+  assert.ok(d.pluginVersion);
+  assert.ok(d.webuiVersion);
+  assert.ok(d.systemVersion);
+  assert.ok(d.cpuModel);
+  assert.ok(d.cpuCores > 0);
+  assert.ok(d.memTotal > 0);
+  assert.equal(typeof d.cpuUsage, 'number');
+  assert.equal(typeof d.memUsage, 'number');
 });

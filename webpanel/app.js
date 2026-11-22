@@ -9,6 +9,7 @@ const state = {
   draft: null,
   tab: 'overview',
   status: null,
+  device: null,
   audit: [],
   changelog: [],
   groupSel: '',
@@ -54,6 +55,24 @@ function fmtTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '-' : d.toLocaleString('zh-CN', { hour12: false });
+}
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = v / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`;
+}
+function fmtDuration(ms) {
+  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const day = Math.floor(total / 86400);
+  const hour = Math.floor((total % 86400) / 3600);
+  const minute = Math.floor((total % 3600) / 60);
+  if (day) return `${day} 天 ${hour} 小时`;
+  if (hour) return `${hour} 小时 ${minute} 分`;
+  return `${minute} 分钟`;
 }
 function diff(before, after) {
   if (Array.isArray(after) || Array.isArray(before)) {
@@ -282,6 +301,7 @@ async function loadBoot() {
   state.boot = r.data;
   state.draft = deepClone(r.data.settings);
   state.status = r.data.status;
+  state.device = r.data.device || null;
   state.security = r.data.security || state.security;
   updateHeader();
   render();
@@ -297,6 +317,7 @@ async function refreshStatus() {
   const r = await req('/status');
   if (!r.ok) return;
   state.status = r.data.status;
+  state.device = r.data.device || state.device;
   updateHeader();
   if (state.tab === 'overview') render();
 }
@@ -410,8 +431,63 @@ function renderOverview(el) {
   const s = statusInfo(state.status);
   const panel = b.panel || {};
   const compat = b.compat || {};
+  const d = state.device || b.device || {};
+  const appId = b.settings.appId || state.status?.appIdMasked || '未配置';
+  const cpuPct = Math.max(0, Math.min(100, Number(d.cpuUsage) || 0));
+  const memPct = Math.max(0, Math.min(100, Number(d.memUsage) || 0));
+  const cpuSpeed = d.cpuSpeedMhz ? (Number(d.cpuSpeedMhz) / 1000).toFixed(2) : '-';
+  const napcat = d.napcatVersion || '未接入';
   el.innerHTML = `
-    <div class="grid cols-4">
+    <div class="device-card">
+      <div class="device-id">
+        <div class="avatar">QQ</div>
+        <div style="min-width:0;flex:1">
+          <div class="device-bot-name">QQ 机器人 <span class="device-dot ${esc(s.cls)}"></span></div>
+          <div class="device-account mono">${esc(appId)}</div>
+        </div>
+        <span class="pill ${s.cls === 'ok' ? 'ok' : s.cls === 'bad' ? 'bad' : ''}">${esc(s.text)}</span>
+      </div>
+      <div class="device-sys">
+        <h4>系统信息</h4>
+        <dl class="device-kv">
+          <dt>插件版本</dt><dd>v${esc(b.version)}</dd>
+          <dt>WebUI 版本</dt><dd>v${esc(d.webuiVersion || b.version)}</dd>
+          <dt>NapCat 版本</dt><dd>${esc(napcat)}</dd>
+          <dt>系统版本</dt><dd>${esc(d.systemVersion || '-')}</dd>
+        </dl>
+        <p class="hint" style="margin-top:10px">使用 QQ 官方 Bot API，不依赖 NapCat / QQ 客户端。</p>
+      </div>
+      <div class="device-metrics">
+        <div class="metric-row">
+          <div class="metric-info">
+            <h4>CPU</h4>
+            <dl class="device-kv">
+              <dt>型号</dt><dd>${esc(d.cpuModel || '未知')}</dd>
+              <dt>内核数</dt><dd>${Number(d.cpuCores) || 0} 核 · ${esc(cpuSpeed)} GHz</dd>
+              <dt>运行时长</dt><dd>${fmtDuration(d.processUptimeMs)}</dd>
+            </dl>
+          </div>
+          <div class="gauge" style="--p:${cpuPct};--ring:var(--accent)">
+            <div class="gauge-inner"><b>${Math.round(cpuPct)}%</b><span>CPU 占用</span></div>
+          </div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-info">
+            <h4>内存</h4>
+            <dl class="device-kv">
+              <dt>总量</dt><dd>${fmtBytes(d.memTotal)}</dd>
+              <dt>使用量</dt><dd>${fmtBytes(d.memUsed)}</dd>
+              <dt>本进程</dt><dd>${fmtBytes(d.processRss)}</dd>
+            </dl>
+          </div>
+          <div class="gauge" style="--p:${memPct};--ring:#e05a7a">
+            <div class="gauge-inner"><b>${Math.round(memPct)}%</b><span>内存占用</span></div>
+          </div>
+        </div>
+        <div class="device-foot">Node ${esc(d.nodeVersion || '-')} · ${esc(d.hostName || '-')} · 系统运行 ${fmtDuration(d.systemUptimeMs)}</div>
+      </div>
+    </div>
+    <div class="grid cols-4" style="margin-top:14px">
       <div class="stat"><b>${b.counts.groupCount}</b><span>已登记群</span></div>
       <div class="stat"><b>${b.counts.memberCount}</b><span>成员台账</span></div>
       <div class="stat"><b>${b.counts.pendingCount}</b><span>待审批</span></div>
