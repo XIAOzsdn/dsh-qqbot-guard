@@ -319,17 +319,13 @@ async function savePatch(patch) {
     return;
   }
   const basic = isBasicPatchClient(patch);
-  if (!admin() && !basic) {
-    toast('普通管理员只能修改违规词、正则、模糊词和入群欢迎语', true);
-    return;
-  }
   let token = '';
-  if (admin() && !basic) {
+  if (!admin() && !basic) {
     const summary = summarize(patch);
     for (let i = 1; i <= 3; i++) {
       const ok = await modal(
         `第 ${i}/3 次确认`,
-        `你正在修改机器人级别的设置，保存后会通知所有已加入的群；如果配置了通知对象，会在群里 @ 该成员。\n\n变更内容：\n${summary}`,
+        `你正在以普通管理员身份修改机器人级别的设置，保存后会通知所有已加入的群；如果配置了通知对象，会在群里 @ 该成员。\n\n变更内容：\n${summary}`,
         i === 3 ? '确认保存' : '继续确认',
       );
       if (!ok) return;
@@ -468,10 +464,10 @@ function disabledAttr(condition) { return condition ? 'disabled' : ''; }
 
 function renderModeration(el) {
   const m = state.draft.moderation;
-  const ro = !admin();
+  const ro = false;
   el.innerHTML = `
     <div class="card">
-      <h3>违规防护 <span class="sub">${ro ? '普通管理员：仅可修改词表' : '修改后需三次确认并通知所有群'}</span></h3>
+      <h3>违规防护 <span class="sub">${admin() ? '修改后通知所有群' : '普通管理员修改需三次确认'}</span></h3>
       <div class="row">
         <label class="check"><input id="m-enabled" type="checkbox" ${m.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用防护</label>
         <label class="check"><input id="m-fuzzy" type="checkbox" ${m.fuzzy.enabled ? 'checked' : ''} ${disabledAttr(ro)}>模糊变体匹配</label>
@@ -487,7 +483,7 @@ function renderModeration(el) {
         <label class="field"><span>同一用户冷却（秒）</span><input id="m-cool" type="number" min="0" value="${m.cooldownSec}" ${disabledAttr(ro)}></label>
       </div>
       <label class="field"><span>违规词（每行一个）</span><textarea id="m-words" ${disabledAttr(false)}>${esc(lines(m.keywords))}</textarea></label>
-      <label class="field"><span>正则规则（每行一个，仅最高管理员可改）</span><textarea id="m-regex" ${disabledAttr(ro)}>${esc(lines(m.regexes))}</textarea></label>
+      <label class="field"><span>正则规则（每行一个，仅最高管理员可改）</span><textarea id="m-regex" ${disabledAttr(!admin())}>${esc(lines(m.regexes))}</textarea></label>
       <label class="field"><span>额外模糊别名（每行一个，格式：别名=标准词）</span><textarea id="m-extras" ${disabledAttr(false)}>${esc(lines(m.fuzzy.extras))}</textarea></label>
       <label class="field"><span>图片广告关键词（每行一个）</span><textarea id="m-adwords" ${disabledAttr(ro)}>${esc(lines(m.media.adKeywords))}</textarea></label>
     </div>
@@ -538,7 +534,7 @@ function renderModeration(el) {
 
     <div class="row" style="margin-top:14px">
       <button id="m-save" class="btn primary">保存违规防护设置</button>
-      <span class="hint">普通管理员只能保存词表与别名。</span>
+      <span class="hint">普通管理员修改机器人设置需三次确认。</span>
     </div>`;
 
   if (!ro) {
@@ -559,8 +555,7 @@ function renderModeration(el) {
   $('m-save').addEventListener('click', () => {
     m.keywords = parseLines($('m-words').value);
     m.fuzzy.extras = parseLines($('m-extras').value);
-    if (!admin()) return savePatch(sectionPatch(['moderation']));
-    m.regexes = parseLines($('m-regex').value);
+    if (admin()) m.regexes = parseLines($('m-regex').value);
     m.enabled = $('m-enabled').checked;
     m.fuzzy.enabled = $('m-fuzzy').checked;
     m.media.detectImages = $('m-img').checked;
@@ -588,10 +583,10 @@ function renderModeration(el) {
 
 function renderJoin(el) {
   const j = state.draft.join;
-  const ro = !admin();
+  const ro = false;
   el.innerHTML = `
     <div class="card">
-      <h3>入群审批 <span class="sub">${ro ? '普通管理员不可修改审批策略' : ''}</span></h3>
+      <h3>入群审批 <span class="sub">${admin() ? '' : '普通管理员修改需三次确认'}</span></h3>
       <div class="row">
         <label class="check"><input id="j-auto" type="checkbox" ${j.autoApprove ? 'checked' : ''} ${disabledAttr(ro)}>关键词匹配自动通过</label>
         <label class="check"><input id="j-risk" type="checkbox" ${j.autoDeclineRisk ? 'checked' : ''} ${disabledAttr(ro)}>风险账号自动拒绝</label>
@@ -604,7 +599,7 @@ function renderJoin(el) {
     </div>
 
     <div class="card">
-      <h3>入群欢迎 <span class="sub">普通管理员可以修改</span></h3>
+      <h3>入群欢迎 <span class="sub">普通管理员可以直接修改</span></h3>
       <label class="check"><input id="j-welcome" type="checkbox" ${j.welcome.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用欢迎语</label>
       <label class="field"><span>欢迎模板（支持 {user} {name} {group}）</span><textarea id="j-template">${esc(j.welcome.template)}</textarea></label>
       <label class="field"><span>欢迎语变体（每行一条，随机挑选；留空则只用模板）</span><textarea id="j-variants">${esc(lines(j.welcome.variants))}</textarea></label>
@@ -646,13 +641,12 @@ function renderJoin(el) {
 
     <div class="row" style="margin-top:14px">
       <button id="j-save" class="btn primary">保存入群设置</button>
-      <span class="hint">普通管理员保存时只提交欢迎语。</span>
+      <span class="hint">普通管理员修改机器人设置需三次确认。</span>
     </div>`;
 
   $('j-save').addEventListener('click', () => {
     j.welcome.template = $('j-template').value;
     j.welcome.variants = parseLines($('j-variants').value);
-    if (!admin()) return savePatch({ join: { welcome: { template: j.welcome.template, variants: j.welcome.variants } } });
     j.autoApprove = $('j-auto').checked;
     j.autoDeclineRisk = $('j-risk').checked;
     j.approveKeywords = parseLines($('j-ok-key').value);
@@ -788,25 +782,25 @@ function renderGroups(el) {
     </div>
 
     <div class="card">
-      <h3>按群覆盖设置 <span class="sub">留空 = 继承全局</span></h3>
+      <h3>按群覆盖设置 <span class="sub">留空 = 继承全局；普通管理员修改需三次确认</span></h3>
       <label class="field"><span>选择群</span>
         <select id="g-sel">
           ${groups.map((g) => `<option value="${esc(g.gid)}" ${state.groupSel === g.gid ? 'selected' : ''}>${esc(g.name || g.gid)}</option>`).join('')}
         </select></label>
       <div class="grid cols-3">
         <label class="field"><span>违规动作</span>
-          <select id="og-action" ${disabledAttr(ro)}>
+          <select id="og-action" ${disabledAttr(false)}>
             <option value="">继承</option>
             ${['warn', 'mute', 'kick'].map((x) => `<option value="${x}" ${override.moderation?.action === x ? 'selected' : ''}>${({ warn: '警告', mute: '禁言', kick: '移出' })[x]}</option>`).join('')}
           </select></label>
-        <label class="field"><span>禁言秒数</span><input id="og-mute" type="number" min="0" value="${override.moderation?.muteSeconds ?? ''}" placeholder="继承" ${disabledAttr(ro)}></label>
-        <label class="field"><span>观察期分钟</span><input id="og-obs" type="number" min="0" value="${override.join?.observation?.minutes ?? ''}" placeholder="继承" ${disabledAttr(ro)}></label>
+        <label class="field"><span>禁言秒数</span><input id="og-mute" type="number" min="0" value="${override.moderation?.muteSeconds ?? ''}" placeholder="继承" ${disabledAttr(false)}></label>
+        <label class="field"><span>观察期分钟</span><input id="og-obs" type="number" min="0" value="${override.join?.observation?.minutes ?? ''}" placeholder="继承" ${disabledAttr(false)}></label>
       </div>
       <div class="grid cols-2">
         <label class="field"><span>覆盖违规词（每行一个，留空继承）</span><textarea id="og-words">${esc(lines(override.moderation?.keywords || []))}</textarea></label>
         <label class="field"><span>覆盖欢迎语变体（每行一条，留空继承）</span><textarea id="og-welcome">${esc(lines(override.join?.welcome?.variants || []))}</textarea></label>
       </div>
-      <label class="check"><input id="og-reset" type="checkbox" ${ro ? 'disabled' : ''}>清除该群所有覆盖，恢复继承</label>
+      <label class="check"><input id="og-reset" type="checkbox">清除该群所有覆盖，恢复继承</label>
       <div class="row" style="margin-top:10px"><button id="og-save" class="btn primary">保存该群设置</button></div>
     </div>
 
@@ -1017,7 +1011,7 @@ function renderChangelog(el) {
 
 function renderSettings(el) {
   const s = state.draft;
-  const ro = !admin();
+  const ro = false;
   const panel = state.boot.panel || {};
   const sec = state.security || {};
   const pwdRule = sec.passwordMin
@@ -1025,7 +1019,7 @@ function renderSettings(el) {
     : '新密码必须同时包含字母和数字，且不能与另一个角色的密码相同。';
   el.innerHTML = `
     <div class="card">
-      <h3>机器人凭据 <span class="sub">仅最高管理员可改</span></h3>
+      <h3>机器人凭据 <span class="sub">普通管理员修改需三次确认</span></h3>
       <div class="grid cols-2">
         <label class="field"><span>AppID</span><input id="s-appid" value="${esc(s.appId)}" ${disabledAttr(ro)}></label>
         <label class="field"><span>AppSecret（留空保持不变）</span><input id="s-secret" type="password" placeholder="${s.appSecret ? '已设置，留空不变' : '未设置'}" ${disabledAttr(ro)}></label>
@@ -1068,10 +1062,10 @@ function renderSettings(el) {
     <div class="card">
       <h3>安全</h3>
       <dl class="kv">
-        <dt>当前角色</dt><dd>${admin() ? '最高管理员（全部权限）' : '普通管理员（仅词表与欢迎语）'}</dd>
+        <dt>当前角色</dt><dd>${admin() ? '最高管理员（全部权限）' : '普通管理员（可改设置，机器人级修改需三次确认）'}</dd>
         <dt>面板密码</dt><dd>${state.security?.initialized ? '已设置，可在下方修改' : '尚未设置'}</dd>
       </dl>
-      ${ro ? '' : `
+      ${admin() ? `
       <div class="grid cols-3" style="margin-top:12px">
         <label class="field"><span>要修改的密码</span>
           <select id="pw-target"><option value="admin">最高管理员</option><option value="operator">普通管理员</option></select></label>
@@ -1079,7 +1073,7 @@ function renderSettings(el) {
         <label class="field"><span>新密码</span><input id="pw-new" type="password"></label>
       </div>
       <button id="pw-save" class="btn">修改密码</button>
-      <p class="hint">${pwdRule}</p>`}
+      <p class="hint">${pwdRule}</p>` : ''}
     </div>
 
     <div class="card">
@@ -1087,7 +1081,7 @@ function renderSettings(el) {
       <div class="row">
         <button id="cfg-export" class="btn">导出配置 JSON</button>
         <label class="check"><input id="cfg-secrets" type="checkbox">包含 AppSecret</label>
-        ${ro ? '' : '<button id="cfg-import" class="btn danger">导入配置</button>'}
+        ${admin() ? '<button id="cfg-import" class="btn danger">导入配置</button>' : ''}
       </div>
       <p class="hint">导出的文件包含词表、按群配置、公告、黑名单；默认不含 AppSecret。</p>
     </div>
@@ -1097,7 +1091,6 @@ function renderSettings(el) {
     </div>`;
 
   $('s-save').addEventListener('click', () => {
-    if (!admin()) return toast('需要最高管理员权限', true);
     s.appId = $('s-appid').value.trim();
     const secret = $('s-secret').value;
     if (secret) s.appSecret = secret;
@@ -1115,7 +1108,7 @@ function renderSettings(el) {
     savePatch(sectionPatch(['appId', 'appSecret', 'autoConnect', 'watchJoinRequests', 'panel', 'commands']));
   });
 
-  if (!ro) {
+  if (admin()) {
     $('pw-save').addEventListener('click', async () => {
       const problem = pwdProblem($('pw-new').value);
       if (problem) return toast(problem, true);
@@ -1136,7 +1129,7 @@ function renderSettings(el) {
     download('qqbot-guard-config.json', JSON.stringify(r.data, null, 2));
   });
 
-  if (!ro) {
+  if (admin()) {
     $('cfg-import').addEventListener('click', () => {
       const input = document.createElement('input');
       input.type = 'file';

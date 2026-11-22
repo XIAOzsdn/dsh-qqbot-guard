@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../lib/store.js';
+import { createApi } from '../lib/api.js';
 import { buildSaveSettings, mountRoutes } from '../lib/http.js';
 import { assertEnvelope } from '../lib/envelope.js';
 
@@ -155,4 +156,60 @@ test('公告创建与发布接口', async () => {
   assert.equal(published.json.ok, true);
   assert.equal(published.json.data.sent, 1);
   cleanup();
+});
+
+test('三次确认仅约束普通管理员', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qqg-confirm-'));
+  const store = new Store(dir);
+  const runtime = {
+    store,
+    dataDir: dir,
+    version: '1.1.0',
+    logger: console,
+    getBot: () => ({ snapshot: () => ({ configured: false, state: 'unconfigured' }) }),
+    restartBot() {},
+  };
+  const api = createApi(runtime);
+  const operator = { role: 'operator', via: 'panel', sessionId: 'op-1' };
+  const admin = { role: 'admin', via: 'panel', sessionId: 'admin-1' };
+
+  // 普通管理员改机器人级设置：没有令牌必须被拦截
+  let r = await api.dispatch({
+    method: 'POST', path: '/settings', auth: operator,
+    body: { patch: { moderation: { action: 'mute' } } },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'CONFIRM_REQUIRED');
+
+  // 只改违规词属于基础修改，不需要三次确认
+  r = await api.dispatch({
+    method: 'POST', path: '/settings', auth: operator,
+    body: { patch: { moderation: { keywords: ['测试词'] } } },
+  });
+  assert.equal(r.ok, true);
+
+  // 普通管理员完成三次挑战后可保存
+  let token = '';
+  for (let i = 1; i <= 3; i++) {
+    const c = await api.dispatch({ method: 'POST', path: '/settings/challenge', auth: operator });
+    assert.equal(c.ok, true);
+    if (i === 3) token = c.data.token;
+  }
+  assert.ok(token);
+  r = await api.dispatch({
+    method: 'POST', path: '/settings', auth: operator,
+    body: { patch: { moderation: { action: 'mute' } }, confirmToken: token },
+  });
+  assert.equal(r.ok, true);
+
+  // 最高管理员改机器人级设置直接生效，不再需要三次确认
+  r = await api.dispatch({
+    method: 'POST', path: '/settings', auth: admin,
+    body: { patch: { moderation: { action: 'kick' } } },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(store.settings.moderation.action, 'kick');
+
+  store.dispose();
+  rmSync(dir, { recursive: true, force: true });
 });
