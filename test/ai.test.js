@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { normalizeSettings } from '../lib/config.js';
-import { AiGuard, parseVerdict, parseQuizReply, parseGradeReply, solveArithmetic, JOIN_VERDICTS } from '../lib/ai.js';
+import { AiGuard, parseVerdict, parseQuizReply, parseGradeReply, parseIntentReply, solveArithmetic, JOIN_VERDICTS } from '../lib/ai.js';
 import { Moderation } from '../lib/moderation.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, aiJoinActive } from '../lib/join.js';
 
@@ -556,4 +556,18 @@ test('AI 审批时段：白天 / 晚上 / 群活跃', () => {
     state: { groups: { g1: { lastSeenAt: new Date(Date.now() - 3600_000).toISOString() } } },
   };
   assert.equal(aiJoinActive(active, idleStore, 'g1', Date.now()), false);
+});
+
+test('指令解析：时长与纯数字不会被当作成员目标', () => {
+  const byMinute = parseIntentReply('{"action":"mute","target":"1 分钟","seconds":60}');
+  assert.equal(byMinute.ok, true);
+  assert.equal(byMinute.intent.target, '');
+
+  const byNumber = parseIntentReply('{"action":"mute","target":"1","seconds":60}');
+  assert.equal(byNumber.ok, true);
+  assert.equal(byNumber.intent.target, '');
+
+  const byOpenid = parseIntentReply('{"action":"mute","target":"36E079A653371EF7468E940A859C90D3","seconds":60}');
+  assert.equal(byOpenid.ok, true);
+  assert.equal(byOpenid.intent.target, '36E079A653371EF7468E940A859C90D3');
 });

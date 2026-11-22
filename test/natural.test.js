@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { Moderation } from '../lib/moderation.js';
 import { detectMentionsBot } from '../lib/bot.js';
-import { parseNaturalIntent, handleNaturalCommand, extractMentionUids } from '../lib/natural.js';
+import { parseNaturalIntent, handleNaturalCommand, extractMentionUids, clearLastTarget } from '../lib/natural.js';
 
 function makeStore(settings = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'qqg-natural-'));
@@ -320,6 +320,45 @@ test('@ 成员解析：剔除机器人自己，兼容两种标签', () => {
   );
   assert.deepEqual(extractMentionUids('<@!u3> 禁言一下', 'app1'), ['u3']);
   assert.deepEqual(extractMentionUids('<@!app1> 你好', 'app1'), []);
+});
+
+test('禁言指令：openid 是目标，1 分钟是时长', () => {
+  const intent = parseNaturalIntent('禁言 1 分钟, 36E079A653371EF7468E940A859C90D3');
+  assert.equal(intent.action, 'mute');
+  assert.equal(intent.target, '36E079A653371EF7468E940A859C90D3');
+  assert.equal(intent.seconds, 60);
+});
+
+test('禁言指令：只有时长时不能把 1 当成昵称', () => {
+  const intent = parseNaturalIntent('禁言 1 分钟');
+  assert.equal(intent.action, 'mute');
+  assert.equal(intent.target, '');
+  assert.equal(intent.seconds, 60);
+});
+
+test('省略目标的续指令沿用上一条查询到的成员', async () => {
+  clearLastTarget('g1');
+  const { store, cleanup } = makeStore();
+  store.upsertMember('g1', 'u2', { name: 'AI 功能测试' });
+  const sent = [];
+  const muted = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    setMemberMute: async (gid, uid, seconds) => { muted.push({ gid, uid, seconds }); return { ok: true }; },
+  };
+  const info = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '查询“AI 功能测试”的信息',
+    settings: store.settings, store, client,
+  });
+  assert.equal(info.action, 'info');
+  const r = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '禁言 1 分钟',
+    settings: store.settings, store, client,
+  });
+  assert.equal(r.action, 'mute');
+  assert.deepEqual(muted[0], { gid: 'g1', uid: 'u2', seconds: 60 });
+  clearLastTarget('g1');
+  cleanup();
 });
 
 test('同义说法：闭嘴 / 请出去 / 别说话 / 半小时', () => {
