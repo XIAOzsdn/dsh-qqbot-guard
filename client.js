@@ -1608,7 +1608,16 @@ window.__ModuleLoader__.load({
               label: '允许受信任成员 @机器人 用自然语言下指令',
               onChange: function (v) { set('commands.naturalEnabled', v); },
             }),
+            h(Field, { label: '免@续聊（秒）' },
+              h(NumberInput, {
+                value: draft.commands.followUpSec,
+                min: 0,
+                max: 600,
+                onChange: function (v) { set('commands.followUpSec', v); },
+                style: { width: 90 },
+              })),
             h(Field, { label: '前缀' }, h(TextInput, { value: draft.commands.prefix || '/', onChange: function (v) { set('commands.prefix', v); }, style: { width: 80 } }))),
+          h('p', { className: 'qqg-hint' }, '也可以直接 @ 要处理的成员再说动作（推荐，最准确）。同一成员 @ 过一次后，上表秒数内继续说话不必重复 @；填 0 关闭。'),
           h(Field, { label: '允许使用的成员 openid（每行一个；信任成员自动允许）', wide: true },
             h(TextArea, { value: listToLines(draft.commands.allowUsers), onChange: function (v) { set('commands.allowUsers', linesToList(v)); } })),
           h(MemberSearch, {

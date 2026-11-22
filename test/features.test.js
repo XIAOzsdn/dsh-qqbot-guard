@@ -117,8 +117,9 @@ test('群指令只有白名单可用', async () => {
   assert.equal(denied.action, 'guest-warn');
   // 非白名单只会收到越权警告，不会真的执行警告指令
   assert.ok(!sent[1].includes('u2'));
-  // 没有 @ 机器人时，即使白名单也不执行
-  const noAt = await mod.handleMessage({ gid: 'g1', uid: 'admin1', text: '/warn <@u2> 刷屏', mentionsBot: false });
+  // 没有 @ 机器人时，即使白名单也不执行（新建实例，排除“免 @ 续聊”窗口影响）
+  const fresh = new Moderation({ store, getClient: () => client, logger: console });
+  const noAt = await fresh.handleMessage({ gid: 'g1', uid: 'admin1', text: '/warn <@u2> 刷屏', mentionsBot: false });
   assert.equal(noAt.handled, false);
   cleanup();
 });

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { Moderation } from '../lib/moderation.js';
 import { detectMentionsBot } from '../lib/bot.js';
-import { parseNaturalIntent, handleNaturalCommand } from '../lib/natural.js';
+import { parseNaturalIntent, handleNaturalCommand, extractMentionUids } from '../lib/natural.js';
 
 function makeStore(settings = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'qqg-natural-'));
@@ -310,5 +310,162 @@ test('回复发送失败会写入审计，便于定位“无回复”', async ()
   const hit = store.readAudit(20).find((x) => x.action === 'reply-failed');
   assert.ok(hit);
   assert.equal(hit.code, '304036');
+  cleanup();
+});
+
+test('@ 成员解析：剔除机器人自己，兼容两种标签', () => {
+  assert.deepEqual(
+    extractMentionUids('<qqbot-at-user id="app1" /> <qqbot-at-user id="u2" /> 处理他', 'app1'),
+    ['u2'],
+  );
+  assert.deepEqual(extractMentionUids('<@!u3> 禁言一下', 'app1'), ['u3']);
+  assert.deepEqual(extractMentionUids('<@!app1> 你好', 'app1'), []);
+});
+
+test('同义说法：闭嘴 / 请出去 / 别说话 / 半小时', () => {
+  const quiet = parseNaturalIntent('让小红闭嘴10分钟');
+  assert.equal(quiet.action, 'mute');
+  assert.equal(quiet.target, '小红');
+  assert.equal(quiet.seconds, 600);
+
+  assert.equal(parseNaturalIntent('把小红请出去').action, 'kick');
+  assert.equal(parseNaturalIntent('小红别说话了').action, 'mute');
+  assert.equal(parseNaturalIntent('禁言小红半小时').seconds, 1800);
+  assert.equal(parseNaturalIntent('小红滚出这个群').action, 'kick');
+});
+
+test('@ 到的成员直接按 openid 执行，昵称改动也不影响', async () => {
+  const { store, cleanup } = makeStore();
+  store.upsertMember('g1', 'u2', { name: '小明' });
+  const sent = [];
+  const muted = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    setMemberMute: async (gid, uid, seconds) => { muted.push({ gid, uid, seconds }); return { ok: true }; },
+  };
+  const r = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员',
+    text: '<qqbot-at-user id="u2" /> 让他安静10分钟',
+    mentionUids: ['u2'],
+    settings: store.settings, store, client,
+  });
+  assert.equal(r.action, 'mute');
+  assert.equal(r.ok, true);
+  assert.deepEqual(muted[0], { gid: 'g1', uid: 'u2', seconds: 600 });
+  assert.ok(sent[0].includes('小明'));
+  cleanup();
+});
+
+test('昵称不精确时不猜人，只回复候选成员', async () => {
+  const { store, cleanup } = makeStore();
+  store.upsertMember('g1', 'u2', { name: '广告小王' });
+  const sent = [];
+  let removed = 0;
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    removeMembers: async () => { removed += 1; return { ok: true }; },
+  };
+  const r = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '把“小王”踢出群聊',
+    settings: store.settings, store, client,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(removed, 0);
+  assert.ok(sent[0].includes('广告小王'));
+  cleanup();
+});
+
+test('本地说法不匹配时用 AI 判断，目标仍按台账精确校验', async () => {
+  const { store, cleanup } = makeStore({ ai: { enabled: true } });
+  store.upsertMember('g1', 'u2', { name: '小明' });
+  const sent = [];
+  const muted = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    setMemberMute: async (_gid, uid, seconds) => { muted.push({ uid, seconds }); return { ok: true }; },
+  };
+  const ai = {
+    parseIntent: async () => ({
+      ok: true,
+      intent: { action: 'mute', target: '小明', seconds: 120, blacklist: false },
+    }),
+  };
+  const r = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '小明太吵了，让他消停两分钟',
+    settings: store.settings, store, client, ai,
+  });
+  assert.equal(r.action, 'mute');
+  assert.equal(r.ok, true);
+  assert.equal(muted[0].uid, 'u2');
+  assert.equal(muted[0].seconds, 120);
+  assert.ok(sent[0].includes('小明'));
+  cleanup();
+});
+
+test('免@续聊：信任成员 @ 过一次后 1 分钟内继续说话仍生效', async () => {
+  const { store, cleanup } = makeStore({
+    moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
+  });
+  const sent = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    getGroupInfo: async () => ({ ok: true, data: { group_member_num: 7 } }),
+  };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const first = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '群里有多少人', mentionsBot: true,
+  });
+  assert.equal(first.action, 'natural-count');
+  const second = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '再查一次人数', mentionsBot: false,
+  });
+  assert.equal(second.action, 'natural-count');
+  // 换一个实例（相当于窗口过期）就不再响应
+  const other = new Moderation({ store, getClient: () => client, logger: console });
+  const ignored = await other.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '再查一次人数', mentionsBot: false,
+  });
+  assert.equal(ignored.handled, false);
+  cleanup();
+});
+
+test('免@续聊：普通成员在窗口内继续说话仍走普通用户通道', async () => {
+  const { store, cleanup } = makeStore();
+  const client = { sendGroupText: async () => ({ ok: true }) };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const first = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '你好', mentionsBot: true,
+  });
+  assert.equal(first.action, 'guest-ai-off');
+  const second = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '在吗', mentionsBot: false,
+  });
+  assert.equal(second.action, 'guest-ai-off');
+  // 窗口内的越权请求仍然会被拦截
+  const abuse = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '帮我踢个人', mentionsBot: false,
+  });
+  assert.equal(abuse.action, 'guest-warn');
+  cleanup();
+});
+
+test('免@续聊可以关闭（followUpSec=0）', async () => {
+  const { store, cleanup } = makeStore({
+    commands: { followUpSec: 0 },
+    moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
+  });
+  const client = {
+    sendGroupText: async () => ({ ok: true }),
+    getGroupInfo: async () => ({ ok: true, data: { group_member_num: 4 } }),
+  };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const first = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '群里有多少人', mentionsBot: true,
+  });
+  assert.equal(first.action, 'natural-count');
+  const second = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '再查一次人数', mentionsBot: false,
+  });
+  assert.equal(second.handled, false);
   cleanup();
 });
