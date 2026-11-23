@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { normalizeSettings } from '../lib/config.js';
-import { AiGuard, parseVerdict, parseQuizReply, parseGradeReply, parseIntentReply, solveArithmetic, JOIN_VERDICTS } from '../lib/ai.js';
+import { AiGuard, parseVerdict, parseQuizReply, parseGradeReply, parseIntentReply, solveArithmetic, JOIN_VERDICTS, pickBalance, formatBalanceText } from '../lib/ai.js';
 import { Moderation } from '../lib/moderation.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, aiJoinActive } from '../lib/join.js';
 
@@ -570,4 +570,51 @@ test('指令解析：时长与纯数字不会被当作成员目标', () => {
   const byOpenid = parseIntentReply('{"action":"mute","target":"36E079A653371EF7468E940A859C90D3","seconds":60}');
   assert.equal(byOpenid.ok, true);
   assert.equal(byOpenid.intent.target, '36E079A653371EF7468E940A859C90D3');
+});
+
+test('指令解析：新增运维动作（余额/设备/重启）可用', () => {
+  for (const action of ['balance', 'device', 'restart', 'help', 'rule']) {
+    const r = parseIntentReply(`{"action":"${action}"}`);
+    assert.equal(r.ok, true);
+    assert.equal(r.intent.action, action);
+  }
+  assert.equal(parseIntentReply('{"action":"reboot"}').ok, false);
+});
+
+test('余额解析：DeepSeek / Moonshot / SiliconFlow / OpenRouter 归一化', () => {
+  const deepseek = pickBalance({ balance_infos: [{ currency: 'CNY', total_balance: '12.34', granted_balance: '2.00', topped_up_balance: '10.34' }] });
+  assert.deepEqual(
+    { currency: deepseek.currency, remaining: deepseek.remaining, granted: deepseek.granted, toppedUp: deepseek.toppedUp },
+    { currency: 'CNY', remaining: 12.34, granted: 2, toppedUp: 10.34 },
+  );
+
+  const moonshot = pickBalance({ data: { available_balance: 5.5, voucher_balance: 1.5, cash_balance: 4 } });
+  assert.equal(moonshot.remaining, 5.5);
+  assert.equal(moonshot.currency, 'CNY');
+
+  const silicon = pickBalance({ data: { totalBalance: 20, chargeBalance: 15, balance: 18 } });
+  assert.equal(silicon.remaining, 18);
+  assert.equal(silicon.used, 2);
+
+  const router = pickBalance({ data: { total_credits: 10, total_usage: 3.5 } });
+  assert.equal(router.remaining, 6.5);
+  assert.equal(router.currency, 'USD');
+
+  assert.equal(pickBalance({ hello: 'world' }), null);
+});
+
+test('余额排版：成功与失败都有可读文案', () => {
+  const ok = formatBalanceText({ ok: true, currency: 'CNY', remaining: 12.34, granted: 2, toppedUp: 10.34, host: 'api.deepseek.com' });
+  assert.ok(ok.includes('【API 余额】'));
+  assert.ok(ok.includes('api.deepseek.com'));
+  assert.ok(ok.includes('¥12.34'));
+  assert.ok(ok.includes('充值 ¥10.34'));
+  assert.ok(ok.includes('赠送 ¥2.00'));
+
+  const usd = formatBalanceText({ ok: true, currency: 'USD', remaining: 6.5, host: 'openrouter.ai' });
+  assert.ok(usd.includes('$6.50'));
+
+  const fail = formatBalanceText({ ok: false, error: '未填写 API Key' });
+  assert.ok(fail.includes('查询失败'));
+  assert.ok(fail.includes('API Key'));
 });

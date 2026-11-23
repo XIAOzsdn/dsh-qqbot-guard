@@ -477,3 +477,78 @@ test('/重启：非白名单成员不会触发重启', async () => {
   assert.equal(called, 0);
   cleanup();
 });
+
+test('/api余额：多个别名都能查询，非白名单拿不到', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const ai = {
+    queryBalance: async () => ({
+      ok: true, currency: 'CNY', remaining: 12.34, granted: 2, toppedUp: 10.34,
+      host: 'api.deepseek.com', endpoint: '/user/balance',
+    }),
+  };
+  const mod = new Moderation({ store, getClient: () => client, logger: console, ai });
+
+  for (const cmd of ['/api余额', '/api', '/API', '/余额', '/额度']) {
+    const r = await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: cmd, mentionsBot: true });
+    assert.equal(r.action, 'command-balance', cmd);
+  }
+  assert.ok(sent.every((x) => x.includes('【API 余额】')));
+  assert.ok(sent[0].includes('12.34'));
+
+  const denied = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '/api余额', mentionsBot: true,
+  });
+  assert.notEqual(denied.action, 'command-balance');
+  assert.equal(sent.filter((x) => x.includes('【API 余额】')).length, 5);
+  assert.ok(store.readAudit(20).some((x) => x.action === 'balance'));
+  cleanup();
+});
+
+test('自然语言：余额 / 设备 / 重启都能识别（含 AI 兜底与二次确认）', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({
+    commands: { naturalEnabled: true, allowUsers: ['u1'] },
+    moderation: { trustedUsers: [{ uid: 'u1', name: '管理员' }] },
+    ai: { enabled: true },
+  });
+  const sent = [];
+  let restarted = 0;
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const ai = {
+    queryBalance: async () => ({ ok: true, currency: 'CNY', remaining: 3.5, host: 'api.moonshot.cn' }),
+    // 本地识别不了的说法，由 AI 判定为“查设备”
+    parseIntent: async () => ({ ok: true, intent: { action: 'device', target: '', seconds: 0, blacklist: false } }),
+  };
+  const mod = new Moderation({
+    store, getClient: () => client, logger: console, ai,
+    restartService: async () => { restarted += 1; },
+  });
+
+  const bal = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '看看 API 还有多少余额', mentionsBot: true,
+  });
+  assert.equal(bal.action, 'natural-balance');
+  assert.ok(sent.some((x) => x.includes('【API 余额】')));
+
+  const dev = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '你现在过得怎么样', mentionsBot: true,
+  });
+  assert.equal(dev.action, 'natural-device');
+  assert.ok(sent.some((x) => x.includes('【设备信息】')));
+
+  const armed = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '重启一下插件', mentionsBot: true,
+  });
+  assert.equal(armed.action, 'natural-restart-confirm');
+
+  const confirmed = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '确认', mentionsBot: true,
+  });
+  assert.equal(confirmed.action, 'natural-restart');
+  await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
+  assert.equal(restarted, 1);
+  cleanup();
+});
