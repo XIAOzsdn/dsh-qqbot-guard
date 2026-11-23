@@ -128,7 +128,8 @@ export function apply(ctx, config) {
 
 function createRuntime(ctx, config, logger) {
   const dataDir = resolveDataDir(ctx, config);
-  const store = new Store(dataDir);
+  // store / auth / ai / panel 都要能在“完整重启”时整体替换，因此用 let
+  let store = new Store(dataDir);
 
   // 首次安装 / 自有设置为空时，用宿主配置里的凭据补位（不改宿主配置文件）。
   const seeded = mergeSettings(store.settings, {
@@ -141,8 +142,8 @@ function createRuntime(ctx, config, logger) {
 
   let bot;
   let restarting = false;
-  const auth = new AuthStore(dataDir);
-  const ai = new AiGuard({ store, logger, dsh: llmSeamOf(ctx) });
+  let auth = new AuthStore(dataDir);
+  let ai = new AiGuard({ store, logger, dsh: llmSeamOf(ctx) });
   const runtime = {
     dataDir,
     store,
@@ -158,9 +159,10 @@ function createRuntime(ctx, config, logger) {
     saveSettings: null,
     restartBot,
     startBot,
+    restartPlugin,
   };
   runtime.api = createApi(runtime);
-  const panel = new WebPanel(runtime);
+  let panel = new WebPanel(runtime);
   runtime.panel = panel;
   runtime.getPanelInfo = () => panel.info();
   runtime.applyPanelSettings = async () => {
@@ -264,16 +266,11 @@ function createRuntime(ctx, config, logger) {
     });
   };
 
-  /** 重启插件服务：强制重连 QQ（不受“自动连接”开关影响）+ 重启独立面板 */
-  runtime.restartService = async () => {
-    const ok = await restartBot(true);
-    try {
-      await panel.restart();
-    } catch (error) {
-      logger.warn?.(`[qqbot-guard] 重启面板失败：${errorText(error)}`);
-    }
-    return ok;
-  };
+  /**
+   * 群内 /重启 指令的入口：完整重启插件运行时（见 restartPlugin）。
+   * @param {{gid?: string, uid?: string, name?: string}} [info] 指令发起人与所在群
+   */
+  runtime.restartService = (info = {}) => restartPlugin(info);
 
   const compat = checkCompat({ dataDir });
   if (!compat.ok) {
@@ -328,6 +325,121 @@ function createRuntime(ctx, config, logger) {
     } finally {
       restarting = false;
     }
+  }
+
+  /**
+   * 完整重启插件运行时（等价于“插件进程重启”，但不杀死 dsh 宿主进程）：
+   *   1. 断开 QQ 连接（WebSocket、调度器、HTTP 客户端缓存）
+   *   2. 断开控制面板（停止 HTTP 服务）
+   *   3. 断开数据层（flush 落盘、清理定时器）与 AI 引擎
+   *   4. 从磁盘重新创建 Store / AuthStore（相当于“启动数据库”）
+   *   5. 重建并启动控制面板
+   *   6. 重新连接 QQ（不受“自动连接”开关影响）
+   *   7. 回到发起群 @ 发起人回复重启结果
+   * 之所以不真的结束进程：插件运行在 dsh 宿主内，杀掉进程会连同 dsh 一起退出，
+   * 既无法回报结果，也可能导致插件不再被拉起。这里做的是“运行时级完整重建”。
+   * @param {{gid?: string, uid?: string, name?: string}} [info]
+   */
+  async function restartPlugin(info = {}) {
+    if (restarting) return false;
+    restarting = true;
+    let botOk = false;
+    let panelOk = false;
+    let panelError = '';
+    try {
+      // 1) 断开 QQ 连接
+      const oldBot = bot;
+      bot = undefined;
+      try {
+        await oldBot?.stop();
+      } catch (error) {
+        logger.warn?.(`[qqbot-guard] 重启：断开 QQ 连接异常 ${errorText(error)}`);
+      }
+
+      // 2) 断开控制面板
+      try {
+        await panel.stop();
+      } catch (error) {
+        logger.warn?.(`[qqbot-guard] 重启：断开控制面板异常 ${errorText(error)}`);
+      }
+
+      // 3) 断开数据层与 AI（落盘并释放定时器/缓存）
+      try {
+        store.dispose();
+      } catch (error) {
+        logger.warn?.(`[qqbot-guard] 重启：关闭数据层异常 ${errorText(error)}`);
+      }
+      try {
+        ai.dispose();
+      } catch { /* ignore */ }
+
+      // 4) 从磁盘重新加载数据层（启动数据库）
+      store = new Store(dataDir);
+      runtime.store = store;
+      auth = new AuthStore(dataDir);
+      runtime.auth = auth;
+      ai = new AiGuard({ store, logger, dsh: llmSeamOf(ctx) });
+      runtime.ai = ai;
+      runtime.challenges = new Map();
+      runtime.saveSettings = buildSaveSettings(runtime);
+
+      // 5) 重建并启动控制面板
+      panel = new WebPanel(runtime);
+      runtime.panel = panel;
+      runtime.getPanelInfo = () => panel.info();
+      try {
+        const r = await panel.start();
+        panelOk = !!r?.ok;
+        if (!panelOk) panelError = String(r?.error || '监听失败');
+      } catch (error) {
+        panelError = errorText(error);
+        logger.warn?.(`[qqbot-guard] 重启：控制面板启动异常 ${panelError}`);
+      }
+
+      // 6) 重新连接 QQ（强制，不受自动连接开关影响）
+      botOk = await startBot();
+    } finally {
+      restarting = false;
+    }
+
+    // 7) 回报结果
+    const gid = String(info?.gid || '');
+    if (!gid) return botOk;
+    const uid = String(info?.uid || '');
+    const head = `${uid ? mention(uid) : ''}`.trim();
+    let text;
+    if (botOk && panelOk) {
+      text = `${head} 插件服务已完整重启成功（QQ、控制面板、数据均已重新加载）。`.trim();
+    } else if (botOk && !panelOk) {
+      text = `${head} 插件已重启，QQ 已重新连接，但控制面板未能启动（${panelError || '未知原因'}），请检查端口占用后在面板或 dsh 重启。`.trim();
+    } else if (!botOk && panelOk) {
+      text = `${head} 插件已重启，控制面板已恢复，但 QQ 连接未成功，正在自动重连。`.trim();
+    } else {
+      text = `${head} 插件已重启，但 QQ 连接与控制面板都未成功，正在自动重连，请检查 AppID/AppSecret 与端口占用。`.trim();
+    }
+    let notified = false;
+    try {
+      const client = runtime.getClient();
+      if (client) {
+        const r = await client.sendGroupText(gid, text);
+        notified = !!r?.ok;
+        if (!notified) {
+          logger.warn?.(`[qqbot-guard] 重启结果通知发送失败：${r?.err?.human || r?.err?.code || '未知原因'}`);
+        }
+      } else {
+        logger.warn?.('[qqbot-guard] 重启后没有可用连接，无法发送重启结果通知');
+      }
+    } catch (error) {
+      logger.warn?.(`[qqbot-guard] 重启结果通知异常：${errorText(error)}`);
+    }
+    store.appendAudit({
+      kind: 'command', action: 'restart-result',
+      groupId: gid, groupName: store.state.groups[gid]?.name || '',
+      userId: uid, userName: String(info?.name || ''),
+      detail: `完整重启：QQ ${botOk ? '成功' : '失败'}，面板 ${panelOk ? '成功' : `失败（${panelError || '未知原因'}）`}，数据已重新加载；结果通知${notified ? '已发送' : '未发送'}`,
+      ok: botOk && panelOk && notified, confidence: 1,
+    });
+    return botOk && panelOk;
   }
 
   logger.info?.(`[qqbot-guard] 数据目录：${dataDir}`);

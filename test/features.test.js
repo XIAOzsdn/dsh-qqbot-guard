@@ -359,7 +359,41 @@ test('/设备：免 @ 续聊窗口内也能查询', async () => {
   cleanup();
 });
 
-test('/重启：白名单成员先收到回复，再触发重启', async () => {
+test('/重启：需要二次确认，确认后才执行并带上发起人信息', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
+  const sent = [];
+  let called = 0;
+  let payload = null;
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({
+    store, getClient: () => client, logger: console,
+    restartService: async (info) => { called += 1; payload = info; },
+  });
+
+  // 第一次：只进入确认窗口，不重启
+  const first = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '/restart', mentionsBot: true,
+  });
+  assert.equal(first.action, 'command-restart-confirm');
+  assert.ok(sent[0].includes('确认'));
+  assert.equal(called, 0);
+
+  // 第二次：确认执行
+  const second = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '/重启', mentionsBot: true,
+  });
+  assert.equal(second.action, 'command-restart');
+  assert.ok(sent[1].includes('已确认'));
+  assert.equal(called, 0);
+  await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
+  assert.equal(called, 1);
+  assert.deepEqual(payload, { gid: 'g1', uid: 'u1', name: '管理员' });
+  assert.ok(store.readAudit(10).some((x) => x.action === 'restart'));
+  cleanup();
+});
+
+test('/确认：可用确认别名，无待确认操作时明确告知', async () => {
   const { store, cleanup } = makeStore();
   store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
   const sent = [];
@@ -369,15 +403,60 @@ test('/重启：白名单成员先收到回复，再触发重启', async () => {
     store, getClient: () => client, logger: console,
     restartService: async () => { called += 1; },
   });
-  const r = await mod.handleMessage({
-    gid: 'g1', uid: 'u1', name: '管理员', text: '/restart', mentionsBot: true,
+
+  const empty = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '/确认', mentionsBot: true,
   });
-  assert.equal(r.action, 'command-restart');
-  assert.ok(sent[0].includes('重启'));
-  assert.equal(called, 0);
+  assert.equal(empty.action, 'command-restart-expired');
+  assert.ok(sent[0].includes('没有待确认'));
+
+  await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: '/重启', mentionsBot: true });
+  const ok = await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: '/确认', mentionsBot: true });
+  assert.equal(ok.action, 'command-restart');
   await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
   assert.equal(called, 1);
-  assert.ok(store.readAudit(10).some((x) => x.action === 'restart'));
+  cleanup();
+});
+
+test('/重启：确认前执行其他指令会撤销待确认状态', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({
+    commands: { enabled: true, allowUsers: ['u1'], ruleText: '群规' },
+  });
+  let called = 0;
+  const client = { sendGroupText: async () => ({ ok: true }) };
+  const mod = new Moderation({
+    store, getClient: () => client, logger: console,
+    restartService: async () => { called += 1; },
+  });
+  await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: '/重启', mentionsBot: true });
+  await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: '/rule', mentionsBot: true });
+  const again = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '/重启', mentionsBot: true,
+  });
+  assert.equal(again.action, 'command-restart-confirm');
+  await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
+  assert.equal(called, 0);
+  cleanup();
+});
+
+test('/重启：restartConfirmSec=0 时免确认直接执行', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({
+    commands: { enabled: true, allowUsers: ['u1'], restartConfirmSec: 0 },
+  });
+  let called = 0;
+  const client = { sendGroupText: async () => ({ ok: true }) };
+  const mod = new Moderation({
+    store, getClient: () => client, logger: console,
+    restartService: async () => { called += 1; },
+  });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '/重启', mentionsBot: true,
+  });
+  assert.equal(r.action, 'command-restart');
+  await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
+  assert.equal(called, 1);
   cleanup();
 });
 
