@@ -1263,7 +1263,7 @@ function renderSettings(el) {
         <label class="field"><span>免@续聊（秒）</span><input id="s-follow-up" type="number" min="0" max="600" value="${s.commands.followUpSec}" style="width:90px" ${disabledAttr(ro)}></label>
         <label class="field"><span>前缀</span><input id="s-cmd-prefix" value="${esc(s.commands.prefix)}" style="width:80px" ${disabledAttr(ro)}></label>
       </div>
-      <p class="hint">示例：@机器人 看看群里有多少人；@机器人 把“某某”踢出群聊并拉黑；@机器人 禁言“某某”10分钟。也可以直接 @ 要处理的成员再说动作。同一成员 @ 过一次后，上表秒数内继续说话不必重复 @（填 0 关闭）。</p>
+      <p class="hint">示例：@机器人 看看群里有多少人；@机器人 把“某某”踢出群聊并拉黑；@机器人 禁言“某某”10分钟。也可以直接 @ 要处理的成员再说动作。同一成员 @ 过一次后，上表秒数内继续说话不必重复 @（填 0 关闭）。白名单成员可用 /设备 查看设备与资源占用、/重启 重启插件并自动登录（不受“启用指令”开关限制）。</p>
       <label class="field"><span>允许使用的成员 openid（每行一个；信任成员自动允许）</span><textarea id="s-cmd-users" ${disabledAttr(ro)}>${esc(lines(s.commands.allowUsers))}</textarea></label>
       <div class="row" style="margin-bottom:8px">
         <input id="cmd-q" class="grow" placeholder="搜索成员昵称 / openid">

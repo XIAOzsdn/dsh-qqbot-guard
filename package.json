@@ -18,6 +18,7 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
+    "CHANGELOG.md",
     "scripts/validate.mjs",
     "scripts/doctor.mjs",
     "test"

@@ -264,6 +264,17 @@ function createRuntime(ctx, config, logger) {
     });
   };
 
+  /** 重启插件服务：强制重连 QQ（不受“自动连接”开关影响）+ 重启独立面板 */
+  runtime.restartService = async () => {
+    const ok = await restartBot(true);
+    try {
+      await panel.restart();
+    } catch (error) {
+      logger.warn?.(`[qqbot-guard] 重启面板失败：${errorText(error)}`);
+    }
+    return ok;
+  };
+
   const compat = checkCompat({ dataDir });
   if (!compat.ok) {
     logger.warn?.(`[qqbot-guard] 兼容性自检未通过：${compat.requiredFailed.join(', ')}（Node ${compat.node} / ${compat.platform} ${compat.arch}）`);
@@ -291,6 +302,7 @@ function createRuntime(ctx, config, logger) {
       watchJoinRequests: store.settings.watchJoinRequests,
       ai: runtime.ai,
       notifyTrustedAbuse: runtime.notifyTrustedAbuse,
+      restartService: runtime.restartService,
     });
     bot = next;
     try {
@@ -303,15 +315,16 @@ function createRuntime(ctx, config, logger) {
     }
   }
 
-  async function restartBot() {
-    if (restarting) return;
+  async function restartBot(force = false) {
+    if (restarting) return false;
     restarting = true;
     try {
       const old = bot;
       bot = undefined;
       try { await old?.stop(); } catch { /* ignore */ }
-      if (!store.settings.autoConnect) return;
-      await startBot();
+      // force=true 用于群内 /重启 指令：即使关掉了“自动连接”也强制登录
+      if (!force && !store.settings.autoConnect) return false;
+      return await startBot();
     } finally {
       restarting = false;
     }

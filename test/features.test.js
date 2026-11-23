@@ -11,7 +11,8 @@ import { mention } from '../lib/qq-api.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, tickQuizzes } from '../lib/join.js';
 import { AuthStore, LoginGuard, SessionStore, checkPasswordPolicy } from '../lib/auth.js';
 import { isBasicPatch } from '../lib/api.js';
-import { readDeviceInfo } from '../lib/device.js';
+import { readDeviceInfo, formatDeviceInfo } from '../lib/device.js';
+import { LIMITS } from '../lib/defaults.js';
 
 function makeStore() {
   const dir = mkdtempSync(join(tmpdir(), 'qqg-feat-'));
@@ -285,4 +286,115 @@ test('入群拒绝理由可保存并带默认值', () => {
   assert.equal(custom.value.join.rejectReason, '请完善申请资料');
   const fallback = normalizeSettings({ join: {} });
   assert.equal(fallback.value.join.rejectReason, '暂不符合入群条件');
+});
+
+test('设备信息排版包含设备、系统、CPU、内存与版本', () => {
+  const text = formatDeviceInfo({
+    hostName: 'DESKTOP-T',
+    systemVersion: 'Windows 11 10.0.22631 x64',
+    cpuModel: 'Test CPU',
+    cpuCores: 8,
+    cpuUsage: 23.4,
+    memUsed: 8 * 1024 ** 3,
+    memTotal: 16 * 1024 ** 3,
+    memUsage: 50,
+    pluginVersion: '1.5.5',
+    nodeVersion: 'v24.9.0',
+    processUptimeMs: 3 * 3600_000 + 12 * 60_000,
+    systemUptimeMs: 2 * 86_400_000,
+  });
+  assert.ok(text.includes('DESKTOP-T'));
+  assert.ok(text.includes('Windows 11'));
+  assert.ok(text.includes('Test CPU'));
+  assert.ok(text.includes('占用 23.4%'));
+  assert.ok(text.includes('8.0 GB / 16.0 GB（50.0%）'));
+  assert.ok(text.includes('v1.5.5'));
+  assert.ok(text.includes('3小时12分'));
+  assert.ok(text.includes('2天'));
+});
+
+test('/设备：白名单成员可查询，正文带 @ 标签也能识别', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: false, allowUsers: ['u1'] } });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员',
+    text: '<qqbot-at-user id="app1" /> /设备', mentionsBot: true,
+  });
+  assert.equal(r.action, 'command-device');
+  assert.ok(sent[0].includes('【设备信息】'));
+  assert.ok(sent[0].includes('插件：v'));
+  assert.ok(sent[0].includes('CPU：'));
+  assert.ok(sent[0].includes('内存：'));
+  assert.ok(store.readAudit(10).some((x) => x.action === 'device'));
+  cleanup();
+});
+
+test('/设备：非白名单成员拿不到设备信息', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '/设备', mentionsBot: true,
+  });
+  assert.notEqual(r.action, 'command-device');
+  assert.ok(!sent.some((x) => x.includes('【设备信息】')));
+  cleanup();
+});
+
+test('/设备：免 @ 续聊窗口内也能查询', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: '你好', mentionsBot: true });
+  const r = await mod.handleMessage({ gid: 'g1', uid: 'u1', name: '管理员', text: '/设备', mentionsBot: false });
+  assert.equal(r.action, 'command-device');
+  assert.ok(sent.some((x) => x.includes('【设备信息】')));
+  cleanup();
+});
+
+test('/重启：白名单成员先收到回复，再触发重启', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
+  const sent = [];
+  let called = 0;
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({
+    store, getClient: () => client, logger: console,
+    restartService: async () => { called += 1; },
+  });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '/restart', mentionsBot: true,
+  });
+  assert.equal(r.action, 'command-restart');
+  assert.ok(sent[0].includes('重启'));
+  assert.equal(called, 0);
+  await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
+  assert.equal(called, 1);
+  assert.ok(store.readAudit(10).some((x) => x.action === 'restart'));
+  cleanup();
+});
+
+test('/重启：非白名单成员不会触发重启', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
+  let called = 0;
+  const client = { sendGroupText: async () => ({ ok: true }) };
+  const mod = new Moderation({
+    store, getClient: () => client, logger: console,
+    restartService: async () => { called += 1; },
+  });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u9', name: '路人', text: '/重启', mentionsBot: true,
+  });
+  assert.notEqual(r.action, 'command-restart');
+  await new Promise((resolve) => { setTimeout(resolve, LIMITS.restartDelayMs + 300); });
+  assert.equal(called, 0);
+  cleanup();
 });
