@@ -3,8 +3,9 @@
 > 只做群管理：违规防护、入群审批、入群欢迎、入群答题、观察期、公告发布与管理。  
 > 默认不聊天；可选的「普通用户 AI 通道」只在非信任成员 @机器人 时提供受控的轻量闲聊，管理操作一律拦截。
 
-- 当前版本：**v1.5.5**
+- 当前版本：**v1.5.6**
 - 更新记录：**[CHANGELOG.md](./CHANGELOG.md)**
+- 指令集与普通用户边界：**[COMMANDS.md](./COMMANDS.md)**
 - 本仓库默认分支：**`main`**
 - 适用宿主：**dsh ≥ 0.2.0-rc.2**
 - 运行时要求：**Node.js ≥ 24.9.0**（dsh 0.2.x 的硬性要求）
@@ -22,7 +23,7 @@
 | 上游原版分支 | `main`（本次重写基于上传包 `dsh-qqbot-main.zip` 的源码） |
 | 本仓库 | [https://github.com/XIAOzsdn/dsh-qqbot-guard](https://github.com/XIAOzsdn/dsh-qqbot-guard) |
 | 本仓库默认分支 | `main` |
-| 本版标签 | `v1.5.5` |
+| 本版标签 | `v1.5.6` |
 | 关系 | 保留原版核心群管理能力，移除原版的 AI 会话/表情包/语音模块，改为可选、可关停的 AI 辅助，并对架构、面板、依赖和资源占用做重写 |
 
 ### 与上游同步
@@ -106,6 +107,8 @@ git diff main upstream/main --stat
 ---
 
 ## 3. 功能说明
+
+> 完整的指令集、自然语言说法、普通用户能聊的内容与两者分界线，见 **[COMMANDS.md](./COMMANDS.md)**。
 
 ### 【1】 违规防护
 
@@ -613,6 +616,7 @@ dsh-qqbot-guard/
 │   └── doctor.mjs           # 兼容性与网络体检
 ├── test/                    # 126 项单元测试
 ├── README.md                # 项目说明（本文件）
+├── COMMANDS.md              # 指令集与普通用户边界
 └── CHANGELOG.md             # 全部版本变更记录
 ```
 
