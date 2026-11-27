@@ -581,6 +581,16 @@ test('指令解析：新增运维动作（余额/设备/重启）可用', () => 
   assert.equal(parseIntentReply('{"action":"reboot"}').ok, false);
 });
 
+test('指令解析：全员禁言 / 解除全员禁言 在 AI 白名单内', () => {
+  const ban = parseIntentReply('{"action":"whole-ban","seconds":1800}');
+  assert.equal(ban.ok, true);
+  assert.equal(ban.intent.action, 'whole-ban');
+  assert.equal(ban.intent.seconds, 1800);
+  const unban = parseIntentReply('{"action":"whole-unban"}');
+  assert.equal(unban.ok, true);
+  assert.equal(unban.intent.action, 'whole-unban');
+});
+
 test('余额解析：DeepSeek / Moonshot / SiliconFlow / OpenRouter 归一化', () => {
   const deepseek = pickBalance({ balance_infos: [{ currency: 'CNY', total_balance: '12.34', granted_balance: '2.00', topped_up_balance: '10.34' }] });
   assert.deepEqual(

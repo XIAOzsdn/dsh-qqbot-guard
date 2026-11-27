@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { normalizeSettings, effectiveJoin, effectiveModeration } from '../lib/config.js';
 import { matchRules, Moderation } from '../lib/moderation.js';
-import { mention } from '../lib/qq-api.js';
+import { mention } from '../lib/mention.js';
 import { handleJoinRequest, handleMemberAdd, handleQuizAnswer, tickQuizzes } from '../lib/join.js';
 import { AuthStore, LoginGuard, SessionStore, checkPasswordPolicy } from '../lib/auth.js';
 import { isBasicPatch } from '../lib/api.js';
@@ -332,6 +332,23 @@ test('/设备：白名单成员可查询，正文带 @ 标签也能识别', asyn
   cleanup();
 });
 
+test('/设备 cpu：只回 CPU 一行，不带内存与设备信息', async () => {
+  const { store, cleanup } = makeStore();
+  store.saveSettings({ commands: { enabled: false, allowUsers: ['u1'] } });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const mod = new Moderation({ store, getClient: () => client, logger: console });
+  const r = await mod.handleMessage({
+    gid: 'g1', uid: 'u1', name: '管理员',
+    text: '/设备 cpu', mentionsBot: true,
+  });
+  assert.equal(r.action, 'command-device');
+  assert.ok(sent[0].includes('CPU 占用率：'));
+  assert.ok(!sent[0].includes('内存'));
+  assert.ok(!sent[0].includes('【设备信息】'));
+  cleanup();
+});
+
 test('/设备：非白名单成员拿不到设备信息', async () => {
   const { store, cleanup } = makeStore();
   store.saveSettings({ commands: { enabled: true, allowUsers: ['u1'] } });
@@ -519,8 +536,16 @@ test('自然语言：余额 / 设备 / 重启都能识别（含 AI 兜底与二�
   const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
   const ai = {
     queryBalance: async () => ({ ok: true, currency: 'CNY', remaining: 3.5, host: 'api.moonshot.cn' }),
-    // 本地识别不了的说法，由 AI 判定为“查设备”
-    parseIntent: async () => ({ ok: true, intent: { action: 'device', target: '', seconds: 0, blacklist: false } }),
+    // v1.9.0 起所有自然语言指令先过 AI：模型按原意判定动作
+    parseIntent: async ({ text }) => ({
+      ok: true,
+      intent: {
+        action: String(text).includes('余额') ? 'balance' : (String(text).includes('重启') ? 'restart' : 'device'),
+        target: '',
+        seconds: 0,
+        blacklist: false,
+      },
+    }),
   };
   const mod = new Moderation({
     store, getClient: () => client, logger: console, ai,

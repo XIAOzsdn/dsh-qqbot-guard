@@ -65,6 +65,30 @@ test('发布成功 / 部分失败', async () => {
   cleanup();
 });
 
+test('真·群公告：mode=notice 走 NapCat，失败回落普通消息', async () => {
+  const { store, cleanup } = setup();
+  const created = createAnnouncement({ store, input: { content: '群规更新', targets: ['g1'], mode: 'notice' } });
+  assert.equal(created.item.mode, 'notice');
+
+  // NapCat 可用：整条公告都发成真公告
+  const dirOk = { sendGroupNotice: async ({ gid, content }) => ({ ok: true, via: 'napcat', qqGroupId: '558225608' }) };
+  const clientOk = { sendGroupText: async () => { throw new Error('不应走普通消息'); } };
+  const okR = await publishAnnouncement({ store, client: clientOk, directory: dirOk, id: created.item.id });
+  assert.equal(okR.ok, true);
+  assert.equal(okR.sent, 1);
+  assert.equal(okR.item.results[0].mode, 'notice');
+
+  // NapCat 报错：回落到普通消息
+  const created2 = createAnnouncement({ store, input: { content: '回落测试', targets: ['g1', 'g2'], mode: 'notice' } });
+  const dirFail = { sendGroupNotice: async () => ({ ok: false, error: '机器人不是管理员' }) };
+  const clientText = { sendGroupText: async () => ({ ok: true }) };
+  const fallR = await publishAnnouncement({ store, client: clientText, directory: dirFail, id: created2.item.id });
+  assert.equal(fallR.ok, true);
+  assert.equal(fallR.sent, 2);
+  assert.ok(fallR.item.results.every((x) => x.mode === 'text'));
+  cleanup();
+});
+
 test('调度器只发布到期的公告', async () => {
   const { store, cleanup } = setup();
   const due = createAnnouncement({ store, input: { content: 'due', targets: ['g1'], publishAt: '2026-01-01T00:00:00Z' } });

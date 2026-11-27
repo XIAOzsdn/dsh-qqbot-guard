@@ -27,19 +27,31 @@ for (const c of compat.checks) {
 }
 
 printHeader('依赖加载');
+// v2.1.0 起插件只走普通 QQ 账号（NapCat / OneBot v11），官方 QQ SDK 与 qq-api.js 已移除。
+// 这里改为加载真正承载连接的核心模块，并校验全局 WebSocket 是否可用。
+const CORE_MODULES = [
+  'lib/napcat-transport.js',
+  'lib/napcat-client.js',
+  'lib/bot.js',
+  'lib/config.js',
+  'lib/api.js',
+  'lib/webpanel.js',
+];
 try {
-  await import(pathToFileURL(join(root, 'lib', 'qq-api.js')).href);
-  console.log('[通过] 插件内部模块可加载');
+  for (const rel of CORE_MODULES) {
+    await import(pathToFileURL(join(root, rel)).href);
+  }
+  console.log(`[通过] 插件内部模块可加载（${CORE_MODULES.length} 个核心模块）`);
 } catch (error) {
   failures.push('插件内部模块');
   console.log('[失败] 插件内部模块：' + errorText(error));
 }
 try {
-  const sdk = await import('@tencent-connect/qqbot-nodejs');
-  console.log(`[通过] QQ SDK 可加载${sdk.QQBot ? '（QQBot 已导出）' : ''}`);
+  if (typeof globalThis.WebSocket !== 'function') throw new Error('当前 Node 没有全局 WebSocket');
+  console.log('[通过] 全局 WebSocket（OneBot v11 正向 WS 依赖它，Node 22+ 自带）');
 } catch (error) {
-  failures.push('QQ SDK');
-  console.log('[失败] QQ SDK：' + errorText(error) + '（请重新安装依赖）');
+  failures.push('WebSocket');
+  console.log('[失败] 全局 WebSocket：' + errorText(error) + '（请升级到 Node 22+）');
 }
 try {
   await import('@deepseek-ai/schemastery');

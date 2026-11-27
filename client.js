@@ -84,6 +84,20 @@ window.__ModuleLoader__.load({
       } catch (e) { /* ignore */ }
     }
 
+    /* 接口地址：优先按当前页面解析相对路径，失败再退回站点根路径 /api/qqbot-guard/。
+     * 桌面端页面可能挂在子路径下（例如 /settings），单用相对路径会把请求带到 /settings/api/...
+     * 而那是静态资源兜底，返回纯文本 not found，JSON 解析就炸了。 */
+    function apiUrls(path) {
+      var out = [];
+      try { out.push(new URL(API + path, document.baseURI).href); } catch (e) { /* ignore */ }
+      try {
+        var abs = new URL('/api/qqbot-guard/' + path, location.origin).href;
+        if (out.indexOf(abs) < 0) out.push(abs);
+      } catch (e) { /* ignore */ }
+      if (!out.length) out.push(API + path);
+      return out;
+    }
+
     async function api(path, body) {
       var init = body === undefined
         ? { cache: 'no-store' }
@@ -92,14 +106,21 @@ window.__ModuleLoader__.load({
           headers: { 'content-type': 'application/json', 'x-qqbot-guard': '1' },
           body: JSON.stringify(body),
         };
-      try {
-        var res = await fetch(API + path, init);
-        var json = await res.json();
-        if (!json || typeof json !== 'object') return { ok: false, error: { message: '响应格式异常' } };
-        return json;
-      } catch (e) {
-        return { ok: false, error: { message: '无法连接插件接口：' + (e && e.message ? e.message : String(e)) } };
+      var urls = apiUrls(path);
+      var lastErr = '';
+      for (var i = 0; i < urls.length; i++) {
+        try {
+          var res = await fetch(urls[i], init);
+          var text = await res.text();
+          var json = null;
+          try { json = text ? JSON.parse(text) : null; } catch (e) { json = null; }
+          if (json && typeof json === 'object') return json;
+          lastErr = 'HTTP ' + res.status + '：' + String(text || '').replace(/\s+/gu, ' ').slice(0, 100);
+        } catch (e) {
+          lastErr = e && e.message ? e.message : String(e);
+        }
       }
+      return { ok: false, error: { message: '无法连接插件接口（' + urls[urls.length - 1] + '）：' + (lastErr || '未知错误') } };
     }
 
     function fmtTime(iso) {
@@ -107,6 +128,16 @@ window.__ModuleLoader__.load({
       var d = new Date(iso);
       if (isNaN(d.getTime())) return '-';
       return d.toLocaleString('zh-CN', { hour12: false });
+    }
+
+    function napcatNote(napcat, total) {
+      var parts = ['共 ' + (Number(total) || 0) + ' 人'];
+      if (!napcat) parts.push('NapCat 成员目录未接入：只能看到机器人见过的成员');
+      else if (!napcat.enabled) parts.push('NapCat 成员目录未启用：可在设置里开启完整花名册');
+      else if (napcat.lastError) parts.push('NapCat 同步异常：' + napcat.lastError);
+      else if (!napcat.connected && !napcat.directoryMembers) parts.push('NapCat 未连接：请确认协议端已启动');
+      else parts.push('NapCat 已接入 · 花名册 ' + (Number(napcat.directoryMembers) || 0) + ' 人' + (napcat.lastSyncAt ? ' · 上次同步 ' + fmtTime(napcat.lastSyncAt) : ''));
+      return parts.join(' · ');
     }
 
     function fmtDuration(ms) {
@@ -163,6 +194,38 @@ window.__ModuleLoader__.load({
         out.push(s);
       });
       return out;
+    }
+    /** 群映射：每行 `官方群号 = QQ 群号`，解析成 { gid: qq } */
+    function linesToMap(text) {
+      var out = {};
+      String(text || '').split(/\r?\n/u).forEach(function (raw) {
+        var m = raw.trim().match(/^([^\s=:：]+)\s*[=:：]\s*(\d{5,12})$/u);
+        if (m) out[m[1]] = m[2];
+      });
+      return out;
+    }
+    /** 快捷关键词：每行 `说法 = action`，只写说法时沿用内置动作名 */
+    function keywordsToLines(list) {
+      return (Array.isArray(list) ? list : []).map(function (k) {
+        return k && k.action ? String(k.phrase || '') + ' = ' + String(k.action) : String(k || '');
+      }).join('\n');
+    }
+    function linesToKeywords(text) {
+      var out = [];
+      var seen = {};
+      String(text || '').split(/\r?\n/u).forEach(function (raw) {
+        var line = raw.trim();
+        if (!line || seen[line]) return;
+        var m = line.match(/^([^=]+?)\s*=\s*([a-z][a-z0-9-]*)$/u);
+        var phrase = (m ? m[1] : line).trim().slice(0, 20);
+        var action = (m ? m[2] : '').trim();
+        if (!phrase || seen['p:' + phrase]) return;
+        seen[line] = true;
+        seen['p:' + phrase] = true;
+        out.push(action ? { phrase: phrase, action: action } : { phrase: phrase, action: '' });
+        if (out.length >= 15) return;
+      });
+      return out.filter(function (k) { return k.action; });
     }
     function setIn(obj, path, value) {
       var keys = path.split('.');
@@ -325,6 +388,27 @@ window.__ModuleLoader__.load({
       { id: 'settings', label: '设置' },
     ];
 
+    function LanguageGate(props) {
+      var busyState = useState(false);
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      function pick(language) {
+        if (busy) return;
+        setBusy(true);
+        api('language', { language: language }).then(function () {
+          setBusy(false);
+          props.onDone();
+        });
+      }
+      return h('div', { className: 'qqg-root' },
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '选择界面语言 / Choose language'),
+          h('div', { className: 'qqg-note' }, '首次部署必须先选择语言，之后才能设置密码或进入控制台；未选择前 QQ 服务不会启动。'),
+          h('div', { style: { display: 'flex', gap: '8px', marginTop: '10px' } },
+            h(Btn, { variant: 'primary', onClick: function () { pick('zh-CN'); } }, '简体中文（默认）'),
+            h(Btn, { onClick: function () { pick('en'); } }, 'English'))));
+    }
+
     function QqGuardPanel(props) {
       var bootState = useState(null);
       var boot = bootState[0];
@@ -401,6 +485,8 @@ window.__ModuleLoader__.load({
       }
       if (!boot) return h('div', { className: 'qqg-root' }, h(Empty, { text: '正在加载 QQ 群管家…' }));
 
+      if (boot.needsLanguage) return h(LanguageGate, { onDone: load });
+
       var common = { boot: boot, savePatch: savePatch, reload: load, notify: notify };
       var body;
       if (tab === 'moderation') body = h(ModerationTab, common);
@@ -444,7 +530,7 @@ window.__ModuleLoader__.load({
       var d = boot.device || {};
       var panel = boot.panel || {};
       var s = statusView(st);
-      var appId = (boot.settings && boot.settings.appId) || st.appIdMasked || '未配置';
+      var accountLabel = st.selfId ? String(st.selfId) : '未登录';
       var cpuPct = Math.max(0, Math.min(100, Number(d.cpuUsage) || 0));
       var memPct = Math.max(0, Math.min(100, Number(d.memUsage) || 0));
       var cpuSpeed = d.cpuSpeedMhz ? (Number(d.cpuSpeedMhz) / 1000).toFixed(2) : '-';
@@ -468,9 +554,9 @@ window.__ModuleLoader__.load({
             h('div', { className: 'qqg-avatar' }, 'QQ'),
             h('div', { style: { minWidth: 0, flex: 1 } },
               h('div', { style: { fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 } },
-                'QQ 机器人',
+                'QQ 账号',
                 h('span', { className: 'qqg-pill', 'data-t': s.t }, s.label)),
-              h('div', { className: 'qqg-mono' }, appId))),
+              h('div', { className: 'qqg-mono' }, accountLabel))),
           h('div', { className: 'qqg-device-sys' },
             h('h4', null, '系统信息'),
             h('dl', { className: 'qqg-kv' },
@@ -478,7 +564,7 @@ window.__ModuleLoader__.load({
               h('dt', null, 'WebUI 版本'), h('dd', null, 'v' + (d.webuiVersion || boot.version || '')),
               h('dt', null, 'NapCat 版本'), h('dd', null, d.napcatVersion || '未接入'),
               h('dt', null, '系统版本'), h('dd', null, d.systemVersion || '-')),
-            h('div', { className: 'qqg-hint', style: { marginTop: 8 } }, '使用 QQ 官方 Bot API，不依赖 NapCat / QQ 客户端。')),
+            h('div', { className: 'qqg-hint', style: { marginTop: 8 } }, '以普通 QQ 账号（协议端登录）工作，不需要 QQ 客户端常驻。')),
           h('div', { className: 'qqg-device-metrics' },
             h('div', { className: 'qqg-metric' },
               h('div', null,
@@ -501,7 +587,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'qqg-card' },
           h('h4', null, '连接状态'),
           h('div', { className: 'qqg-row', style: { gap: 18 } },
-            h('div', null, h('div', { className: 'qqg-sub' }, 'AppID'), h('div', { className: 'qqg-mono' }, st.appIdMasked || '-')),
+            h('div', null, h('div', { className: 'qqg-sub' }, 'QQ 账号'), h('div', { className: 'qqg-mono' }, accountLabel)),
             h('div', null, h('div', { className: 'qqg-sub' }, '已连接时长'), h('div', null, st.connectedAt ? fmtDuration(Date.now() - Date.parse(st.connectedAt)) : '-')),
             h('div', null, h('div', { className: 'qqg-sub' }, '群数量'), h('div', null, String((boot.counts && boot.counts.groupCount) || 0))),
             h('div', null, h('div', { className: 'qqg-sub' }, '待审批'), h('div', null, String((boot.counts && boot.counts.pendingCount) || 0))),
@@ -590,7 +676,7 @@ window.__ModuleLoader__.load({
             h(Field, { label: '第几次违规升级' }, h(NumberInput, { value: draft.escalation.violations, min: 1, max: 100, onChange: function (v) { set('escalation.violations', v); } })),
             h(Field, { label: '统计窗口（小时）' }, h(NumberInput, { value: draft.escalation.windowHours, min: 1, max: 720, onChange: function (v) { set('escalation.windowHours', v); } })),
             h(Field, { label: '升级动作' }, h(Select, { value: draft.escalation.action, onChange: function (v) { set('escalation.action', v); }, options: ACTION_OPTIONS }))),
-          h(Field, { label: '豁免群 openid（每行一个，只记录不处置）', wide: true },
+          h(Field, { label: '豁免群号（每行一个，只记录不处置）', wide: true },
             h(TextArea, { value: listToLines(draft.exemptGroups), onChange: function (v) { set('exemptGroups', linesToList(v)); } }))),
         h('div', { className: 'qqg-card' },
           h('h4', null, '链接与黑名单'),
@@ -648,7 +734,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { flex: 1, minWidth: 180 } },
             h(TextInput, {
               value: q,
-              placeholder: props.placeholder || '搜索成员昵称 / openid',
+              placeholder: props.placeholder || '搜索成员昵称 / QQ 号',
               onChange: setQ,
             })),
           h(Btn, { onClick: go, disabled: busy }, busy ? '搜索中…' : '搜索')),
@@ -845,6 +931,12 @@ window.__ModuleLoader__.load({
             h(Field, { label: '感情牌夹带指令禁言（秒）' }, h(NumberInput, { value: guestDraft.emotionalMuteSeconds, min: 0, max: 86400, onChange: function (v) { setGuest('emotionalMuteSeconds', v); } }))),
           h(Field, { label: '人设补充（只影响闲聊语气）', wide: true },
             h(TextArea, { value: guestDraft.persona || '', onChange: function (v) { setGuest('persona', v); } })),
+          h('div', { className: 'qqg-row' },
+            h(Field, { label: '表情包图片（每行一个 URL，可留空）', wide: true },
+              h(TextArea, { value: listToLines(guestDraft.stickers), onChange: function (v) { setGuest('stickers', linesToList(v)); } })),
+            h(Field, { label: '发表情包概率（%）' }, h(NumberInput, { value: guestDraft.stickerChance, min: 0, max: 100, onChange: function (v) { setGuest('stickerChance', v); } })),
+            h(Field, { label: '兜底 emoji（逗号分隔）' },
+              h(TextInput, { value: (guestDraft.emojis || []).join(','), onChange: function (v) { setGuest('emojis', String(v || '').split(/[,，\s]+/u).filter(Boolean)); } }))),
           h(Field, { label: '越权拦截词（每行一个）', wide: true },
             h(TextArea, { value: listToLines(guestDraft.guardKeywords), onChange: function (v) { setGuest('guardKeywords', linesToList(v)); } })),
           h('div', { className: 'qqg-sub' }, '管理操作、索要系统提示、扮演套设定等请求一律拒绝并警告一次；再次越权禁言 5 分钟。感情牌夹带恶意指令直接禁言 1 小时；信任成员触发时只警告并通告所有群。越权判断全在本地完成，不消耗模型。'),
@@ -913,7 +1005,7 @@ window.__ModuleLoader__.load({
       return h('div', null,
         h('div', { className: 'qqg-card' },
           h('h4', null, '新建公告'),
-          h('div', { className: 'qqg-note' }, 'QQ 官方接口不提供“设置群公告”能力，公告会以机器人消息发送到目标群。'),
+          h('div', { className: 'qqg-note' }, '协议端在线且机器人为群管理员/群主时，公告可发成 QQ 原生群公告；否则以机器人消息发送到目标群。'),
           h('div', { className: 'qqg-row' },
             h(Field, { label: '标题（可选）' }, h(TextInput, { value: form.title, onChange: function (v) { setForm(Object.assign({}, form, { title: v })); } })),
             h(Field, { label: '定时发布（留空为草稿）' },
@@ -970,6 +1062,96 @@ window.__ModuleLoader__.load({
             : h(Empty, { text: '还没有公告' })));
     }
 
+    /** 定时任务：全员禁言排期 + 立即执行 */
+    function SchedulesCard(props) {
+      var gid = props.gid || '';
+      var listState = useState([]);
+      var list = listState[0];
+      var setList = listState[1];
+      var formState = useState({ time: '22:30', kind: 'whole-ban', daily: false });
+      var form = formState[0];
+      var setForm = formState[1];
+      var busyState = useState('');
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      var errState = useState('');
+      var err = errState[0];
+      var setErr = errState[1];
+
+      async function load() {
+        var r = await api('schedules');
+        if (r && r.ok) setList((r.data.schedules || []).filter(function (x) { return !gid || x.gid === gid; }));
+      }
+      async function submit() {
+        if (!gid) { setErr('先在上方选择群'); return; }
+        var m = String(form.time || '').match(/^(\d{1,2}):(\d{2})$/u);
+        if (!m) { setErr('时间格式写成 22:30'); return; }
+        var now = new Date();
+        var at = new Date(now);
+        at.setSeconds(0, 0);
+        at.setHours(Number(m[1]), Number(m[2]), 0, 0);
+        if (form.daily) {
+          if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+        } else if (at.getTime() <= now.getTime()) {
+          at.setDate(at.getDate() + 1);
+        }
+        var hh = m[1].padStart(2, '0') + ':' + m[2];
+        setBusy('add'); setErr('');
+        var r = await api('schedules', {
+          gid: gid, kind: form.kind, at: at.getTime(),
+          repeat: form.daily ? 'daily' : 'once', time: hh,
+        });
+        setBusy('');
+        if (!r || !r.ok) { setErr((r && r.error && r.error.message) || '添加失败'); return; }
+        props.notify && props.notify('定时任务已创建');
+        await load();
+      }
+      async function cancel(id) {
+        setBusy('cancel:' + id);
+        var r = await api('schedules/cancel', { id: id });
+        setBusy('');
+        if (!r || !r.ok) { setErr((r && r.error && r.error.message) || '取消失败'); return; }
+        await load();
+        await load();
+      }
+      async function whole(enable) {
+        setBusy('whole'); setErr('');
+        var r = await api('whole-ban', { gid: gid, enable: enable });
+        setBusy('');
+        if (!r || !r.ok) { setErr((r && r.error && r.error.message) || '执行失败（需要 NapCat）'); return; }
+        props.notify && props.notify(enable ? '已开启全员禁言' : '已解除全员禁言');
+      }
+      useEffect(function () { void load(); }, [gid]);
+
+      return h('div', { className: 'qqg-card' },
+        h('h4', null, '全体禁言与定时任务', h('span', { className: 'qqg-sub' }, 'NapCat 可用时走群级禁言；否则按台账逐个禁言')),
+        h('div', { className: 'qqg-row' },
+          h(Btn, { variant: 'danger', disabled: !!busy || !gid, onClick: function () { void whole(true); } }, '立即全员禁言'),
+          h(Btn, { disabled: !!busy || !gid, onClick: function () { void whole(false); } }, '解除全员禁言')),
+        h('div', { className: 'qqg-row' },
+          h(Field, { label: '时间（如 22:30）' }, h(TextInput, { value: form.time, onChange: function (v) { setForm(Object.assign({}, form, { time: v })); }, style: { width: 110 } })),
+          h(Field, { label: '动作' }, h(Select, {
+            value: form.kind, onChange: function (v) { setForm(Object.assign({}, form, { kind: v })); },
+            options: [{ value: 'whole-ban', label: '全员禁言' }, { value: 'whole-unban', label: '解除全员禁言' }],
+          })),
+          h(Check, { checked: form.daily, label: '每天重复', onChange: function (v) { setForm(Object.assign({}, form, { daily: v })); } }),
+          h(Btn, { variant: 'primary', disabled: !!busy, onClick: function () { void submit(); } }, busy === 'add' ? '添加中…' : '添加定时任务')),
+        err ? h('div', { className: 'qqg-error' }, err) : null,
+        list.length
+          ? h('div', { className: 'qqg-table-wrap' }, h('table', { className: 'qqg-table' },
+            h('thead', null, h('tr', null, h('th', null, '时间'), h('th', null, '动作'), h('th', null, '操作'))),
+            h('tbody', null, list.map(function (x) {
+              var when = x.repeat === 'daily' ? ('每天 ' + x.time) : fmtTime(new Date(x.at).toISOString());
+              var what = x.kind === 'whole-ban' ? '全员禁言' : x.kind === 'whole-unban' ? '解除全员禁言'
+                : x.kind === 'mute' ? '禁言成员' : '解除成员禁言';
+              return h('tr', { key: x.id },
+                h('td', null, when),
+                h('td', null, what),
+                h('td', null, h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { void cancel(x.id); } }, '取消')));
+            }))))
+          : h(Empty, { text: '还没有定时任务：在上面设好时间点“添加定时任务”，或在群里说“22:30 全体禁言”。' }));
+    }
+
     function GroupsTab(props) {
       var boot = props.boot;
       var groups = boot.groups || [];
@@ -988,6 +1170,12 @@ window.__ModuleLoader__.load({
       var membersState = useState([]);
       var members = membersState[0];
       var setMembers = membersState[1];
+      var napcatState = useState(boot.napcat || null);
+      var napcat = napcatState[0];
+      var setNapcat = napcatState[1];
+      var totalState = useState(0);
+      var total = totalState[0];
+      var setTotal = totalState[1];
       var busyState = useState('');
       var busy = busyState[0];
       var setBusy = busyState[1];
@@ -1014,12 +1202,27 @@ window.__ModuleLoader__.load({
         setBusy('search');
         var r = await api('members?gid=' + encodeURIComponent(memberGid) + '&q=' + encodeURIComponent(q));
         setBusy('');
-        if (r.ok) setMembers(r.data.members || []);
-        else props.notify((r.error && r.error.message) || '查询失败', true);
+        if (r.ok) {
+          setMembers(r.data.members || []);
+          setTotal(Number(r.data.total) || (r.data.members || []).length);
+          if (r.data.napcat) setNapcat(r.data.napcat);
+        } else props.notify((r.error && r.error.message) || '查询失败', true);
       }
 
+      async function syncDirectory() {
+        setBusy('sync');
+        var r = await api('members/sync', { gid: memberGid });
+        setBusy('');
+        if (!r.ok) return props.notify((r.error && r.error.message) || '同步失败', true);
+        var d = r.data || {};
+        props.notify('已同步 ' + (d.syncedGroups || 0) + ' 个群、' + (d.syncedMembers || 0) + ' 人' + (d.warning ? '（' + d.warning + '）' : ''));
+        await search();
+      }
+
+      useEffect(function () { void search(); }, [memberGid]);
+
       async function addGroup() {
-        if (!String(add.gid || '').trim()) return props.notify('请填写群 openid', true);
+        if (!String(add.gid || '').trim()) return props.notify('请填写群号', true);
         setBusy('add');
         var r = await api('groups', { action: 'add', gid: add.gid.trim(), name: add.name.trim() });
         setBusy('');
@@ -1039,8 +1242,10 @@ window.__ModuleLoader__.load({
       }
 
       async function memberAct(action, m) {
-        setBusy(action + m.uid);
-        var payload = { action: action, gid: m.gid, uid: m.uid };
+        setBusy(action + (m.uid || m.qq));
+        var payload = { action: action, gid: m.gid };
+        if (m.uid) payload.uid = m.uid;
+        else payload.qq = String(m.qq);
         if (action === 'mute') payload.seconds = boot.settings.moderation.muteSeconds;
         var r = await api('members/action', payload);
         setBusy('');
@@ -1072,12 +1277,12 @@ window.__ModuleLoader__.load({
         h('div', { className: 'qqg-card' },
           h('h4', null, '群注册表'),
           h('div', { className: 'qqg-row' },
-            h(Field, { label: '群 openid' }, h(TextInput, { value: add.gid, onChange: function (v) { setAdd(Object.assign({}, add, { gid: v })); } })),
+            h(Field, { label: '群号' }, h(TextInput, { value: add.gid, onChange: function (v) { setAdd(Object.assign({}, add, { gid: v })); } })),
             h(Field, { label: '群名称（可选）' }, h(TextInput, { value: add.name, onChange: function (v) { setAdd(Object.assign({}, add, { name: v })); } })),
             h(Btn, { variant: 'primary', disabled: busy === 'add', onClick: addGroup }, busy === 'add' ? '登记中…' : '登记群')),
           groups.length
             ? h('div', { className: 'qqg-table-wrap', style: { marginTop: 10 } }, h('table', { className: 'qqg-table' },
-              h('thead', null, h('tr', null, h('th', null, '群'), h('th', null, 'openid'), h('th', null, '人数'), h('th', null, '最近活跃'), h('th', null, ''))),
+              h('thead', null, h('tr', null, h('th', null, '群'), h('th', null, 'QQ 号'), h('th', null, '人数'), h('th', null, '最近活跃'), h('th', null, ''))),
               h('tbody', null, groups.map(function (g) {
                 return h('tr', { key: g.gid },
                   h('td', null, g.name || '(未命名群)'),
@@ -1086,7 +1291,7 @@ window.__ModuleLoader__.load({
                   h('td', null, fmtTime(g.lastSeenAt)),
                   h('td', null, h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { removeGroup(g); } }, '移除登记')));
               }))))
-            : h(Empty, { text: '还没有群。机器人收到群事件后会自动登记；也可以手动添加 openid。' })),
+            : h(Empty, { text: '还没有群。机器人收到群事件后会自动登记；也可以手动添加群号。' })),
         h('div', { className: 'qqg-card' },
           h('h4', null, '按群覆盖设置', h('span', { className: 'qqg-sub' }, '留空 = 继承全局')),
           h(Field, { label: '选择群' },
@@ -1131,24 +1336,40 @@ window.__ModuleLoader__.load({
                 })),
                 style: { minWidth: 240 },
               })),
-            h(Field, { label: '搜索（昵称 / openid）' }, h(TextInput, { value: q, onChange: setQ })),
-            h(Btn, { disabled: busy === 'search', onClick: search }, busy === 'search' ? '查询中…' : '查询')),
-          h('div', { className: 'qqg-note' }, '成员台账只记录机器人见过的成员（入群申请、群消息）。查不到时可以先选“全部群”，或者改用 openid 搜索。'),
+            h(Field, { label: '搜索（昵称 / QQ 号）' }, h(TextInput, { value: q, onChange: setQ })),
+            h(Btn, { disabled: busy === 'search', onClick: search }, busy === 'search' ? '查询中…' : '查询'),
+            h(Btn, { variant: 'primary', disabled: busy === 'sync', onClick: syncDirectory }, busy === 'sync' ? '同步中…' : '同步花名册')),
+          h('div', { className: 'qqg-note' }, napcatNote(napcat, total)),
           members.length
             ? h('div', { className: 'qqg-table-wrap' }, h('table', { className: 'qqg-table' },
-              h('thead', null, h('tr', null, h('th', null, '昵称'), h('th', null, 'openid'), h('th', null, '最近活跃'), h('th', null, '操作'))),
+              h('thead', null, h('tr', null, h('th', null, '昵称'), h('th', null, 'QQ'), h('th', null, 'QQ 号'), h('th', null, '来源 / 活跃'), h('th', null, '操作'))),
               h('tbody', null, members.map(function (m) {
-                return h('tr', { key: m.gid + '|' + m.uid },
-                  h('td', null, m.name || '-'),
-                  h('td', { className: 'qqg-mono' }, m.uid),
-                  h('td', null, fmtTime(m.lastSeenAt)),
+                var key = m.gid + '|' + (m.uid || ('qq:' + m.qq));
+                var source = m.source === 'official+napcat' ? '官方 + NapCat'
+                  : m.source === 'napcat' ? 'NapCat 花名册'
+                    : m.pending ? '待审批申请' : '本地台账';
+                var tags = [];
+                if (m.isBot) tags.push('机器人');
+                if (m.role === 'owner') tags.push('群主');
+                else if (m.role === 'admin') tags.push('管理员');
+                if (m.whitelisted) tags.push('白名单');
+                if (m.trusted) tags.push('信任');
+                return h('tr', { key: key },
+                  h('td', null, (String(m.name || m.nickname || '').trim() || (m.uid ? '未命名(' + m.uid.slice(-6) + ')' : '-'))),
+                  h('td', { className: 'qqg-mono' }, m.qq || '未关联'),
+                  h('td', { className: 'qqg-mono' }, m.uid || '-'),
                   h('td', null,
-                    h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                      h(Btn, { disabled: !!busy, onClick: function () { memberAct('mute', m); } }, '禁言'),
-                      h(Btn, { disabled: !!busy, onClick: function () { memberAct('unmute', m); } }, '解除'),
-                      h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { memberAct('kick', m); } }, '移出'))));
+                    h('div', null, source + (tags.length ? (' · ' + tags.join(' · ')) : '')),
+                    h('div', { className: 'qqg-sub' }, (m.messageCount ? ('发言 ' + m.messageCount + ' 次') : '') + (m.lastSeenAt ? (' · ' + fmtTime(m.lastSeenAt)) : ''))),
+                  h('td', null,
+                    m.pending ? h('span', { className: 'qqg-sub' }, '待审批')
+                      : h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                        h(Btn, { disabled: !!busy, onClick: function () { memberAct('mute', m); } }, '禁言'),
+                        h(Btn, { disabled: !!busy, onClick: function () { memberAct('unmute', m); } }, '解除'),
+                        h(Btn, { variant: 'danger', disabled: !!busy, onClick: function () { memberAct('kick', m); } }, '移出'))));
               }))))
-            : h(Empty, { text: '输入关键词后搜索' })));
+            : h(Empty, { text: '没有匹配成员' })),
+        h(SchedulesCard, { gid: memberGid, notify: props.notify }));
     }
 
     function BlacklistTab(props) {
@@ -1163,7 +1384,7 @@ window.__ModuleLoader__.load({
       var items = boot.blacklist || [];
 
       async function addItem() {
-        if (!form.gid || !form.uid.trim()) return props.notify('请填写群和成员 openid', true);
+        if (!form.gid || !form.uid.trim()) return props.notify('请填写群和成员 QQ 号', true);
         setBusy(true);
         var r = await api('blacklist', {
           action: 'add', gid: form.gid, uid: form.uid.trim(), name: form.name.trim(), reason: form.reason.trim(),
@@ -1218,7 +1439,7 @@ window.__ModuleLoader__.load({
                 onChange: function (v) { setForm(Object.assign({}, form, { gid: v })); },
                 options: groups.map(function (g) { return { value: g.gid, label: (g.name || '(未命名群)') + ' · ' + g.gid }; }),
               })),
-            h(Field, { label: '成员 openid' }, h(TextInput, { value: form.uid, onChange: function (v) { setForm(Object.assign({}, form, { uid: v })); } })),
+            h(Field, { label: '成员 QQ 号' }, h(TextInput, { value: form.uid, onChange: function (v) { setForm(Object.assign({}, form, { uid: v })); } })),
             h(Field, { label: '昵称（可选）' }, h(TextInput, { value: form.name, onChange: function (v) { setForm(Object.assign({}, form, { name: v })); } }))),
           h(Field, { label: '原因', wide: true }, h(TextInput, { value: form.reason, placeholder: '例如：多次发广告', onChange: function (v) { setForm(Object.assign({}, form, { reason: v })); } })),
           h(Btn, { variant: 'primary', disabled: busy, onClick: addItem }, '加入黑名单')));
@@ -1265,8 +1486,8 @@ window.__ModuleLoader__.load({
                   return { value: x, label: x };
                 })),
               })),
-            h(Field, { label: '群 openid' }, h(TextInput, { value: f.gid, onChange: function (v) { setF(Object.assign({}, f, { gid: v })); } })),
-            h(Field, { label: '成员 openid' }, h(TextInput, { value: f.uid, onChange: function (v) { setF(Object.assign({}, f, { uid: v })); } })),
+            h(Field, { label: '群号' }, h(TextInput, { value: f.gid, onChange: function (v) { setF(Object.assign({}, f, { gid: v })); } })),
+            h(Field, { label: '成员 QQ 号' }, h(TextInput, { value: f.uid, onChange: function (v) { setF(Object.assign({}, f, { uid: v })); } })),
             h(Btn, { disabled: busy, onClick: function () { void load(); } }, busy ? '查询中…' : '查询'),
             h(Btn, { onClick: exportCsv }, '导出 CSV')),
           items.length
@@ -1338,6 +1559,149 @@ window.__ModuleLoader__.load({
           : h(Empty, { text: '暂无修改记录' }));
     }
 
+    /**
+     * QQ 账号登录（普通账号 · 协议端登录）
+     * 不填 AppID/AppSecret，也不用开 QQ 客户端：这里直接读协议端登录状态，
+     * 未登录时给二维码，扫码即登录；登录过的账号可以一键快速登录。
+     */
+    function QqLoginCard(props) {
+      var cfg = (props.draft && props.draft.napcat) || {};
+      var infoState = useState(null);
+      var info = infoState[0];
+      var setInfo = infoState[1];
+      var qrState = useState(null);
+      var qr = qrState[0];
+      var setQr = qrState[1];
+      var busyState = useState('');
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      var errState = useState('');
+      var err = errState[0];
+      var setErr = errState[1];
+
+      async function load() {
+        var r = await api('napcat/login');
+        if (r.ok) {
+          setInfo(r.data);
+          setErr('');
+          if (r.data.webui && r.data.webui.isLogin) setQr(null);
+        } else {
+          setErr((r.error && r.error.message) || '读取登录状态失败');
+        }
+        return r;
+      }
+      useEffect(function () { void load(); }, []);
+      useEffect(function () {
+        if (!qr) return undefined;
+        var timer = setInterval(async function () {
+          var r = await api('napcat/login');
+          if (!r.ok) return;
+          setInfo(r.data);
+          if (r.data.webui && r.data.webui.isLogin) {
+            setQr(null);
+            props.notify('QQ 已登录：' + (r.data.account.nickname || '') + (r.data.account.selfId ? '（' + r.data.account.selfId + '）' : ''));
+            if (props.reload) void props.reload();
+          }
+        }, 2500);
+        return function () { clearInterval(timer); };
+      }, [qr]);
+
+      async function fetchQr(refresh) {
+        setBusy(refresh ? 'refresh' : 'qr');
+        setErr('');
+        var r = await api('napcat/login/qr', { refresh: !!refresh });
+        setBusy('');
+        if (!r.ok) { setErr((r.error && r.error.message) || '取二维码失败'); return; }
+        setQr(r.data);
+      }
+      async function quickLogin(uin) {
+        setBusy('quick:' + uin);
+        setErr('');
+        var r = await api('napcat/login/quick', { uin: uin });
+        setBusy('');
+        if (!r.ok) { setErr((r.error && r.error.message) || '快速登录失败'); return; }
+        props.notify('已提交登录 ' + uin + '，几秒后自动生效');
+        setTimeout(function () { void load(); }, 3000);
+      }
+
+      var webui = (info && info.webui) || null;
+      var account = (info && info.account) || {};
+      var quick = (info && info.quick) || [];
+      var loggedIn = !!(webui && webui.isLogin);
+      var tone = !webui ? 'off' : (loggedIn ? 'ok' : (webui.reachable ? 'warn' : 'bad'));
+      var toneText = !webui ? '读取中…'
+        : loggedIn ? '已登录'
+          : (webui.reachable ? (webui.loginPhase === 'qrcode_scanned' ? '已扫码，待确认' : '未登录') : '协议端不可达');
+      var phaseText = '';
+      if (qr && webui) {
+        if (webui.loginPhase === 'qrcode_scanned') phaseText = '二维码已扫描，请在手机上确认登录';
+        else if (webui.loginPhase === 'initializing' || webui.loginPhase === 'reconnecting') phaseText = '正在启动 QQ 核心，稍等几秒…';
+        else phaseText = '用手机 QQ 扫下面的二维码（约 2 分钟有效）';
+      }
+
+      return h('div', { className: 'qqg-card' },
+        h('h4', null, 'QQ 账号登录', h('span', { className: 'qqg-sub' }, '普通 QQ 账号 · 不用填 AppID，也不用开 QQ 客户端'),
+          h('span', { className: 'qqg-pill', 'data-t': tone }, toneText)),
+        info && webui && webui.reason ? h('div', { className: 'qqg-note' }, webui.reason) : null,
+        info && !webui ? h('div', { className: 'qqg-note' }, '正在读取协议端登录状态…') : null,
+        info && webui && webui.reachable ? h('div', { className: 'qqg-row', style: { gap: 18 } },
+          h('div', null,
+            h('div', { className: 'qqg-sub' }, '当前账号'),
+            h('div', null, loggedIn
+              ? (webui.nick || '未知昵称') + (webui.uin ? '（' + webui.uin + '）' : '')
+              : (account.selfId ? '协议端已连上，账号 ' + account.selfId : '未登录'))),
+          h('div', null, h('div', { className: 'qqg-sub' }, '核心状态'), h('div', null, webui.coreReady ? '在线' : (webui.isOffline ? '离线' : '启动中'))),
+          h('div', null, h('div', { className: 'qqg-sub' }, '协议端 WebUI'), h('div', { className: 'qqg-mono' }, webui.webuiUrl || '-')),
+          h('div', null, h('div', { className: 'qqg-sub' }, '令牌来源'), h('div', null, webui.tokenSource === 'auto' ? '自动读取' : (webui.tokenSource === 'settings' ? '面板填写' : '-')))) : null,
+        info && webui && webui.loginError ? h('div', { className: 'qqg-note' }, '登录错误：' + webui.loginError) : null,
+        qr
+          ? h('div', { style: { display: 'flex', gap: 16, alignItems: 'flex-start', marginTop: 10, flexWrap: 'wrap' } },
+            h('img', {
+              src: qr.dataUrl,
+              alt: 'QQ 登录二维码',
+              style: { width: 168, height: 168, borderRadius: 8, background: '#fff', border: '1px solid var(--dsw-alias-border-primary,#e5e6eb)' },
+            }),
+            h('div', { style: { minWidth: 200, flex: 1 } },
+              h('div', { className: 'qqg-hint', style: { marginBottom: 8 } }, phaseText),
+              h('div', { className: 'qqg-row' },
+                h(Btn, { disabled: busy === 'refresh', onClick: function () { void fetchQr(true); } }, busy === 'refresh' ? '刷新中…' : '换一张'),
+                h(Btn, { onClick: function () { void load(); } }, '刷新状态'))))
+          : null,
+        !loggedIn && info && webui && webui.reachable
+          ? h('div', { className: 'qqg-row', style: { marginTop: 10 } },
+            h(Btn, { 'data-v': 'primary', disabled: busy === 'qr', onClick: function () { void fetchQr(false); } }, busy === 'qr' ? '获取中…' : (qr ? '重新生成二维码' : '扫码登录')),
+            h(Btn, { onClick: function () { void load(); } }, '刷新状态'))
+          : null,
+        !loggedIn && quick.length
+          ? h('div', { style: { marginTop: 8 } },
+            h('div', { className: 'qqg-sub' }, '本机登录过的账号（点一下直接登录）'),
+            h('div', { className: 'qqg-row', style: { marginTop: 6 } },
+              quick.map(function (q) {
+                return h(Btn, {
+                  key: q.uin,
+                  disabled: busy === 'quick:' + q.uin,
+                  onClick: function () { void quickLogin(q.uin); },
+                }, (q.nick || q.uin) + '（' + q.uin + '）');
+              })))
+          : null,
+        loggedIn
+          ? h('div', { className: 'qqg-hint', style: { marginTop: 8 } },
+            '已用普通 QQ 账号在线：收发消息、群管理、（充值时）浏览器自动化都用这个账号，不需要 QQ 客户端。',
+            '换号请在协议端退出后重新扫码，或直接改下面的启动命令用别的号启动。')
+          : null,
+        err ? h('div', { className: 'qqg-note', style: { color: '#b02020' } }, err) : null,
+        h('div', { className: 'qqg-row', style: { marginTop: 10 } },
+          h(Field, { label: '协议端 WebUI 地址', hint: 'NapCat 默认 http://127.0.0.1:6099' },
+            h(TextInput, { value: cfg.webuiUrl || '', placeholder: 'http://127.0.0.1:6099', onChange: function (v) { props.set('napcat.webuiUrl', v); } })),
+          h(Field, { label: 'WebUI 令牌（可留空）', hint: '留空则按启动命令自动读 webui.json 的 token' },
+            h(TextInput, {
+              type: 'password',
+              value: props.webuiToken || '',
+              placeholder: cfg.webuiToken ? '已设置，留空不变' : '自动读取',
+              onChange: props.setWebuiToken,
+            }))));
+    }
+
     function SettingsTab(props) {
       var boot = props.boot;
       var sState = useState(boot.settings || {});
@@ -1346,9 +1710,6 @@ window.__ModuleLoader__.load({
       var savingState = useState(false);
       var saving = savingState[0];
       var setSaving = savingState[1];
-      var secretState = useState('');
-      var secret = secretState[0];
-      var setSecret = secretState[1];
       var verifyState = useState(null);
       var verify = verifyState[0];
       var setVerify = verifyState[1];
@@ -1364,6 +1725,15 @@ window.__ModuleLoader__.load({
       var aiKeyState = useState('');
       var aiKey = aiKeyState[0];
       var setAiKey = aiKeyState[1];
+      var napTokenState = useState('');
+      var napToken = napTokenState[0];
+      var setNapToken = napTokenState[1];
+      var webuiTokenState = useState('');
+      var webuiToken = webuiTokenState[0];
+      var setWebuiToken = webuiTokenState[1];
+      var napTestState = useState(null);
+      var napTest = napTestState[0];
+      var setNapTest = napTestState[1];
       var aiTestState = useState(null);
       var aiTest = aiTestState[0];
       var setAiTest = aiTestState[1];
@@ -1411,31 +1781,37 @@ window.__ModuleLoader__.load({
       async function save() {
         var name = String(draft.panel.notifyName || '').trim();
         var uid = String(draft.panel.notifyOpenid || '').trim();
-        if (!name && uid) return props.notify('填写 openid 时请同时填写昵称', true);
+        if (!name && uid) return props.notify('填写 QQ 号时请同时填写昵称', true);
         var pendingVerify = false;
         if (name) {
           var v = await verifyNotify(true);
           if (v && v.matched === false && v.definite) {
-            return props.notify(v.reason || '通知对象昵称与 openid 不匹配，已阻止保存', true);
+            return props.notify(v.reason || '通知对象昵称与 QQ 号不匹配，已阻止保存', true);
           }
           pendingVerify = !!(v && v.matched === false);
         }
         var patch = {
-          appId: draft.appId,
+          language: draft.language || 'zh-CN',
           autoConnect: draft.autoConnect,
           watchJoinRequests: draft.watchJoinRequests,
           panel: draft.panel,
           commands: draft.commands,
+          natural: draft.natural,
           ai: draft.ai,
         };
-        if (secret.trim()) patch.appSecret = secret.trim();
         if (aiKey.trim()) patch.ai = Object.assign({}, draft.ai, { apiKey: aiKey.trim() });
+        if (draft.napcat) {
+          patch.napcat = Object.assign({}, draft.napcat);
+          if (napToken.trim()) patch.napcat.token = napToken.trim();
+          if (webuiToken.trim()) patch.napcat.webuiToken = webuiToken.trim();
+        }
         setSaving(true);
         var okSaved = await props.savePatch(patch);
         setSaving(false);
         if (okSaved) {
-          setSecret('');
           setAiKey('');
+          setNapToken('');
+          setWebuiToken('');
           if (pendingVerify) props.notify('已保存；通知对象暂未校验（机器人未连接或无台账记录）');
         }
       }
@@ -1451,6 +1827,35 @@ window.__ModuleLoader__.load({
         setAiTest({
           text: '可用：判定「' + d.verdict + '」，置信度 ' + Number(d.confidence).toFixed(2)
             + ' · ' + d.provider + '/' + d.model + ' · ' + d.latencyMs + 'ms',
+        });
+      }
+
+      async function runNapcatTest() {
+        setNapTest({ busy: true, text: '连接测试中…' });
+        var r = await api('napcat/test', {});
+        if (!r.ok) {
+          setNapTest({ text: (r.error && r.error.message) || '连接失败', bad: true });
+          return;
+        }
+        var d = r.data || {};
+        setNapTest({ text: '已连接：' + (d.nickname || '未知账号') + '（' + (d.selfId || '-') + '），协议端可见 ' + ((d.groups || []).length) + ' 个群' });
+      }
+
+      // 自动探测本机 NapCat / LLOneBot：读出端口与 token 并回填表单，新用户不用手查配置文件
+      async function runNapcatDiscover() {
+        setNapTest({ busy: true, text: '正在探测本机协议端…' });
+        var r = await api('napcat/discover', {});
+        if (!r.ok) {
+          setNapTest({ text: (r.error && r.error.message) || '没有发现可用的 NapCat / LLOneBot', bad: true });
+          return;
+        }
+        var d = r.data || {};
+        set('napcat.enabled', true);
+        set('napcat.wsUrl', d.wsUrl || '');
+        setNapToken('');
+        setNapTest({
+          text: '已发现：' + (d.nickname || '未知账号') + '（' + (d.selfId || '-') + '）· ' + (d.wsUrl || '')
+            + (d.tokenSet ? '（带 token，已保存）' : '') + '，参数已自动填入',
         });
       }
 
@@ -1510,6 +1915,8 @@ window.__ModuleLoader__.load({
       var compat = boot.compat;
       var panel = boot.panel || {};
       var sec = boot.security || {};
+      var napcatCfg = draft.napcat || {};
+      var napcatLive = boot.napcat || {};
       var pwdRule = sec.passwordMin
         ? '新密码至少 ' + sec.passwordMin + ' 位，必须同时包含字母和数字，且不能与另一个角色的密码相同。'
         : '新密码必须同时包含字母和数字，且不能与另一个角色的密码相同。';
@@ -1533,7 +1940,7 @@ window.__ModuleLoader__.load({
       }
 
       var notifySeen = {};
-      var notifyOptions = [{ value: '', label: '选择成员（自动填昵称与 openid）' }];
+      var notifyOptions = [{ value: '', label: '选择成员（自动填昵称与 QQ 号）' }];
       notifyMembers.forEach(function (m) {
         if (!m || !m.uid || notifySeen[m.uid]) return;
         notifySeen[m.uid] = true;
@@ -1545,19 +1952,27 @@ window.__ModuleLoader__.load({
 
       return h('div', null,
         h('div', { className: 'qqg-card' },
-          h('h4', null, '机器人凭据'),
-          h('div', { className: 'qqg-row' },
-            h(Field, { label: 'AppID' }, h(TextInput, { value: draft.appId || '', onChange: function (v) { set('appId', v); } })),
-            h(Field, { label: 'AppSecret', hint: '留空或保持掩码表示不修改' },
-              h(TextInput, {
-                value: secret,
-                placeholder: draft.secretSet ? '已设置（留空不修改）' : '填写 AppSecret',
-                type: 'password',
-                onChange: setSecret,
-              }))),
-          h(Check, { checked: draft.autoConnect, label: '启动时自动连接 QQ', onChange: function (v) { set('autoConnect', v); } }),
-          h(Check, { checked: draft.watchJoinRequests, label: '订阅入群申请事件（需要平台授权 GROUP_MEMBER_EVENT）', onChange: function (v) { set('watchJoinRequests', v); } }),
-          h('div', { className: 'qqg-note' }, '机器人需要在 QQ 开放平台开通「群管理员」相关权限（入群审批、禁言、移除成员），并把机器人设为群管理员。本插件不连接任何 AI 模型，也不处理聊天、表情包、图片或语音。')),
+          h('h4', null, '界面语言'),
+          h(Field, { label: '语言', hint: '默认简体中文；切换后立即生效' },
+            h(Select, {
+              value: draft.language || 'zh-CN',
+              options: [{ value: 'zh-CN', label: '简体中文' }, { value: 'en', label: 'English' }],
+              onChange: function (v) { set('language', v); },
+            })),
+          h('div', { className: 'qqg-note' }, '语言包在插件目录 locale/ 下，可直接替换文件；首次部署未选语言前，插件服务不会启动。')),
+        h(QqLoginCard, {
+          draft: draft,
+          set: set,
+          notify: props.notify,
+          reload: props.reload,
+          webuiToken: webuiToken,
+          setWebuiToken: setWebuiToken,
+        }),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '连接行为'),
+          h(Check, { checked: draft.autoConnect, label: '插件加载时自动连接协议端', onChange: function (v) { set('autoConnect', v); } }),
+          h(Check, { checked: draft.watchJoinRequests, label: '自动同步入群申请', onChange: function (v) { set('watchJoinRequests', v); } }),
+          h('div', { className: 'qqg-note' }, '插件以普通 QQ 账号身份工作（协议端登录）：群消息、@、禁言、踢人、群公告、入群审批都用这个账号的群管理权限。不需要 QQ 客户端常驻，也不需要 AppID/AppSecret。')),
         h('div', { className: 'qqg-card' },
           h('h4', null, '变更通知对象', h('span', { className: 'qqg-sub' }, '仅普通管理员修改时 @')),
           h('div', { className: 'qqg-row' },
@@ -1567,7 +1982,7 @@ window.__ModuleLoader__.load({
                 placeholder: '例如：群主昵称',
                 onChange: function (v) { set('panel.notifyName', v); setVerify(null); },
               })),
-            h(Field, { label: '成员 openid（可留空）' },
+            h(Field, { label: '成员 QQ 号（可留空）' },
               h(TextInput, {
                 value: draft.panel.notifyOpenid || '',
                 placeholder: '不知道就留空；同名时再填',
@@ -1591,7 +2006,66 @@ window.__ModuleLoader__.load({
           h('div', { className: 'qqg-row', style: { marginTop: 2 } },
             h(Btn, { onClick: function () { void verifyNotify(false); } }, '验证通知对象'),
             verifyText ? h('span', { className: 'qqg-pill', 'data-t': verifyTone }, verifyText) : null),
-          h('p', { className: 'qqg-hint' }, 'QQ 官方 Bot API 只提供成员 openid，不提供 QQ 号，所以无法按 QQ 号查人。留空 openid 时按昵称匹配：群内该昵称唯一就 @ 他；有同名成员则需要补 openid 或从上面列表选人。@ 仅在普通管理员修改机器人级设置时生效。')),
+          h('p', { className: 'qqg-hint' }, '通知对象 @ 的是真实 QQ 号（协议端登录的群管理权限）。只填昵称时按昵称唯一匹配：群内该昵称唯一就 @ 他；有同名成员则需要补 QQ 号或从上面列表选人。@ 仅在普通管理员修改机器人级设置时生效。')),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, '协议端连接（OneBot / NapCat）', h('span', { className: 'qqg-sub' }, '收发消息、群成员花名册、群公告都走这里')),
+          h('p', { className: 'qqg-hint' }, '插件以普通 QQ 账号身份工作：消息收发、@、禁言、踢人、全员禁言、真·群公告、入群审批全部通过协议端（NapCat / LLOneBot 的 OneBot v11 WebSocket）完成，不需要 QQ 客户端。'),
+          h('p', { className: 'qqg-hint' }, '地址默认 ws://127.0.0.1:3001；点「自动探测」会直接读取本机协议端的 onebot11_<QQ>.json，把端口和 token 填好。协议端没起时，插件可以按下面的「启动命令」自己把它拉起来。'),
+          h('div', { className: 'qqg-row' },
+            h(Check, { checked: !!napcatCfg.enabled, label: '启用成员目录', onChange: function (v) { set('napcat.enabled', v); } }),
+            h(Check, { checked: napcatCfg.autoDetect !== false, label: '连不上时自动探测地址', onChange: function (v) { set('napcat.autoDetect', v); } }),
+            h(Check, { checked: napcatCfg.autoSync !== false, label: '打开成员页时自动同步', onChange: function (v) { set('napcat.autoSync', v); } }),
+            h(Check, { checked: napcatCfg.noCache !== false, label: '绕过协议端缓存（no_cache）', onChange: function (v) { set('napcat.noCache', v); } }),
+            h('span', {
+              className: 'qqg-pill',
+              'data-t': napcatLive.connected ? 'ok' : (napcatLive.lastError ? 'bad' : 'off'),
+            }, napcatLive.connected ? '已连接' : (napcatLive.lastError ? '连接异常' : '未连接'))),
+          h('div', { className: 'qqg-row', style: { marginTop: 10 } },
+            h(Field, { label: 'WebSocket 地址' },
+              h(TextInput, { value: napcatCfg.wsUrl || '', placeholder: 'ws://127.0.0.1:3001', onChange: function (v) { set('napcat.wsUrl', v); } })),
+            h(Field, { label: 'Token（可留空；留空保持不变）' },
+              h(TextInput, {
+                type: 'password',
+                value: napToken,
+                placeholder: napcatCfg.token ? '已设置，留空不变' : '未设置',
+                onChange: setNapToken,
+              })),
+            h(Field, { label: '缓存时长（分钟，0 = 每次重新拉取）' },
+              h(NumberInput, {
+                value: Math.round((Number(napcatCfg.cacheTtlMs) || 0) / 60000),
+                min: 0, max: 1440,
+                onChange: function (v) { set('napcat.cacheTtlMs', Math.max(0, Math.round(Number(v) || 0)) * 60000); },
+              })),
+            h(Field, { label: '调用超时（毫秒）' },
+              h(NumberInput, {
+                value: Number(napcatCfg.timeoutMs) || 4000,
+                min: 1000, max: 15000, step: 500,
+                onChange: function (v) { set('napcat.timeoutMs', Number(v) || 4000); },
+              }))),
+          h('p', { className: 'qqg-hint' }, '地址模板：NapCat 默认 ws://127.0.0.1:3001；LLOneBot 默认 ws://127.0.0.1:3000；OneBot v11 实现默认 ws://127.0.0.1:6700。端口与 token 在协议端配置的 onebot11_<登录QQ>.json → websocketServers[].port / token 里；没开鉴权时 token 留空。'),
+          h(Field, { label: '手动群映射（每行一条：官方群号 = QQ 群号；留空则按群名自动匹配）', wide: true },
+            h(TextArea, {
+              value: listToLines(Object.keys(napcatCfg.groupMap || {}).map(function (gid) { return gid + ' = ' + napcatCfg.groupMap[gid]; })),
+              placeholder: '0123456789ABCDEF0123456789ABCDEF = 123456789\n（群名与协议端一致时会自动匹配，通常不用手填）',
+              onChange: function (v) { set('napcat.groupMap', linesToMap(v)); },
+            })),
+          h('div', { className: 'qqg-row', style: { marginTop: 8 } },
+            h(Btn, { disabled: !!(napTest && napTest.busy), onClick: function () { void runNapcatDiscover(); } }, napTest && napTest.busy ? '探测中…' : '自动探测'),
+            h(Btn, { disabled: !!(napTest && napTest.busy), onClick: function () { void runNapcatTest(); } }, napTest && napTest.busy ? '测试中…' : '测试连接'),
+            napTest ? h('span', { className: 'qqg-pill', 'data-t': napTest.bad ? 'bad' : 'ok' }, napTest.text) : null,
+            (!napTest && napcatLive.lastError) ? h('span', { className: 'qqg-pill', 'data-t': 'bad' }, napcatLive.lastError) : null),
+          (napcatLive.groups || []).length
+            ? h('p', { className: 'qqg-hint' }, '协议端可见群：' + napcatLive.groups.map(function (g) {
+              return (g.name || g.qqGroupId) + '（' + g.qqGroupId + '，' + (g.memberCount || 0) + ' 人）';
+            }).join(' · '))
+            : null,
+          (napcatLive.mappings || []).length
+            ? h('p', { className: 'qqg-hint' }, '目录匹配：' + napcatLive.mappings.map(function (m) {
+              return (m.name || m.gid) + ' → ' + (m.qqGroupId
+                ? ('QQ ' + m.qqGroupId + '（' + (m.directoryCount || 0) + ' 人' + (m.auto ? '，自动' : '，手动') + '）')
+                : '未匹配');
+            }).join(' · '))
+            : null),
         h('div', { className: 'qqg-card' },
           h('h4', null, '局域网面板'),
           h('div', { className: 'qqg-row' },
@@ -1626,7 +2100,7 @@ window.__ModuleLoader__.load({
               })),
             h(Field, { label: '前缀' }, h(TextInput, { value: draft.commands.prefix || '/', onChange: function (v) { set('commands.prefix', v); }, style: { width: 80 } }))),
           h('p', { className: 'qqg-hint' }, '也可以直接 @ 要处理的成员再说动作（推荐，最准确）。同一成员 @ 过一次后，上表秒数内继续说话不必重复 @；填 0 关闭。白名单成员可用 /设备 查看设备与资源占用、/余额 查询 AI 接口余额、/重启 完整重启插件并自动登录（/重启 需二次确认，完成后会回报结果；不受“启用指令”开关限制）。'),
-          h(Field, { label: '允许使用的成员 openid（每行一个；信任成员自动允许）', wide: true },
+          h(Field, { label: '允许使用的成员 QQ 号（每行一个；信任成员自动允许）', wide: true },
             h(TextArea, { value: listToLines(draft.commands.allowUsers), onChange: function (v) { set('commands.allowUsers', linesToList(v)); } })),
           h(MemberSearch, {
             actionLabel: '加入白名单',
@@ -1643,7 +2117,46 @@ window.__ModuleLoader__.load({
           h(Field, { label: '群规文本（/rule 返回）', wide: true },
             h(TextArea, { value: draft.commands.ruleText || '', onChange: function (v) { set('commands.ruleText', v); } }))),
         h('div', { className: 'qqg-card' },
-          h('h4', null, 'AI 辅助审核', h('span', { className: 'qqg-sub' }, '本地词表的补充，模型失败自动回退')),
+          h('h4', null, '自然语言决策', h('span', { className: 'qqg-sub' }, 'v1.9.0：先问 AI，关键词只兜底')),
+          h('div', { className: 'qqg-row' },
+            h(Check, {
+              checked: (draft.natural || {}).aiFirst !== false,
+              label: '所有自然语言指令先经过 AI 决策',
+              onChange: function (v) { set('natural.aiFirst', v); },
+            }),
+            h(Field, { label: '关键词重排周期（周，最多 10 周）' },
+              h(NumberInput, {
+                value: (draft.natural || {}).reviewWeeks || 3,
+                min: 1,
+                max: 10,
+                onChange: function (v) { set('natural.reviewWeeks', v); },
+                style: { width: 90 },
+              })),
+            h(Field, { label: '最近 7 天用量达到' },
+              h(NumberInput, {
+                value: (draft.natural || {}).weeklyCommands || 100,
+                min: 1,
+                max: 5000,
+                onChange: function (v) { set('natural.weeklyCommands', v); },
+                style: { width: 90 },
+              })),
+            h(Field, { label: '提醒对象 QQ 号（留空=第一个信任成员）' },
+              h(TextInput, {
+                value: (draft.natural || {}).notifyUid || '',
+                onChange: function (v) { set('natural.notifyUid', v); },
+                style: { width: 260 },
+              }))),
+          h(Field, { label: '保留的快捷关键词（最多 15 个，每行“说法 = 动作”）', wide: true },
+            h(TextArea, {
+              value: keywordsToLines((draft.natural || {}).keywords),
+              onChange: function (v) { set('natural.keywords', linesToKeywords(v)); },
+            })),
+          h('p', { className: 'qqg-hint' }, '只有 AI 超时 / 不可用时才会用到这些关键词（例如“列出群成员”“禁言”“解禁”）。到重排周期（默认 3 周，最多 10 周），或最近 7 天用满上面的次数（默认 100 次）时，插件会按最近常用动作自动重排，并 @ 提醒对象。关键词最多保存 15 条，动作名可参考“管理功能”里的清单。')),
+        h('div', { className: 'qqg-card' },
+          h('h4', null, 'AI 辅助审核', h('span', { className: 'qqg-sub' }, '总开关关闭后所有 AI 功能停用，全部走本地规则')),
+          h('div', { className: 'qqg-row' },
+            h(Check, { checked: draft.ai.master !== false, label: 'AI 总开关（关闭后所有 AI 功能失效）', onChange: function (v) { setAi({ master: v }); } })),
+          h('p', { className: 'qqg-hint' }, '总开关关闭时：不调用任何模型，违规判定、入群审批、自然语言指令、闲聊等全部回到本地规则；重新打开即恢复。'),
           h('div', { className: 'qqg-row' },
             h(Check, { checked: draft.ai.enabled, label: '启用 AI 审核', onChange: function (v) { setAi({ enabled: v }); } }),
             h(Check, {
@@ -1867,7 +2380,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'qqg-row' },
             h(Btn, { onClick: exportConfig }, '导出配置 JSON'),
             h(Btn, { variant: 'danger', onClick: importConfig }, '导入配置')),
-          h('p', { className: 'qqg-hint' }, '导出的文件包含词表、按群配置、公告、黑名单；默认不含 AppSecret。')),
+          h('p', { className: 'qqg-hint' }, '导出的文件包含词表、按群配置、公告、黑名单；不含任何密钥（AI 密钥、协议端 token）。')),
         h('div', { className: 'qqg-card' },
           h('h4', null, '兼容性自检'),
           compat

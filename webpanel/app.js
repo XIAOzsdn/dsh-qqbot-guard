@@ -237,6 +237,12 @@ function pwdProblem(password) {
 }
 
 async function checkSession() {
+  // 首次部署：必须先选语言，之后才进入密码设置 / 登录
+  const boot = await req('/bootstrap');
+  if (boot?.ok && boot.data?.needsLanguage) {
+    showLanguage();
+    return;
+  }
   const r = await fetch('/api/qqg/session', { cache: 'no-store' }).then((x) => x.json()).catch(() => null);
   if (r?.ok) {
     state.security = r.data?.security || null;
@@ -252,6 +258,40 @@ async function checkSession() {
     }
   }
   showLogin();
+}
+
+function showLanguage() {
+  for (const id of ['setup', 'login', 'app']) $(id)?.classList.add('hidden');
+  let gate = document.getElementById('language');
+  if (!gate) {
+    gate = document.createElement('div');
+    gate.id = 'language';
+    gate.className = 'login';
+    gate.innerHTML = [
+      '<div class="login-card">',
+      '  <div class="brand"><span class="logo">语</span><div><h1>选择界面语言</h1>',
+      '    <p>Choose your language · 首次部署必须先选择</p></div></div>',
+      '  <p class="hint">语言立即生效并写入设置；未选择语言前，QQ 服务不会启动。</p>',
+      '  <button class="btn primary block" type="button" data-lang="zh-CN">简体中文（默认）</button>',
+      '  <button class="btn block" type="button" data-lang="en" style="margin-top:8px">English</button>',
+      '  <p id="language-error" class="error"></p>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(gate);
+    gate.querySelectorAll('[data-lang]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const language = btn.getAttribute('data-lang');
+        const res = await req('/language', { method: 'POST', body: { language } });
+        if (!res?.ok) {
+          const err = document.getElementById('language-error');
+          if (err) err.textContent = res?.error?.message || '选择失败';
+          return;
+        }
+        location.reload();
+      });
+    });
+  }
+  gate.classList.remove('hidden');
 }
 
 async function setup(event) {
@@ -459,7 +499,7 @@ function renderOverview(el) {
   const panel = b.panel || {};
   const compat = b.compat || {};
   const d = state.device || b.device || {};
-  const appId = b.settings.appId || state.status?.appIdMasked || '未配置';
+  const account = state.status?.selfId || '未登录';
   const cpuPct = Math.max(0, Math.min(100, Number(d.cpuUsage) || 0));
   const memPct = Math.max(0, Math.min(100, Number(d.memUsage) || 0));
   const cpuSpeed = d.cpuSpeedMhz ? (Number(d.cpuSpeedMhz) / 1000).toFixed(2) : '-';
@@ -469,8 +509,8 @@ function renderOverview(el) {
       <div class="device-id">
         <div class="avatar">QQ</div>
         <div style="min-width:0;flex:1">
-          <div class="device-bot-name">QQ 机器人 <span class="device-dot ${esc(s.cls)}"></span></div>
-          <div class="device-account mono">${esc(appId)}</div>
+          <div class="device-bot-name">QQ 账号 <span class="device-dot ${esc(s.cls)}"></span></div>
+          <div class="device-account mono">${esc(account)}</div>
         </div>
         <span class="pill ${s.cls === 'ok' ? 'ok' : s.cls === 'bad' ? 'bad' : ''}">${esc(s.text)}</span>
       </div>
@@ -482,7 +522,7 @@ function renderOverview(el) {
           <dt>NapCat 版本</dt><dd>${esc(napcat)}</dd>
           <dt>系统版本</dt><dd>${esc(d.systemVersion || '-')}</dd>
         </dl>
-        <p class="hint" style="margin-top:10px">使用 QQ 官方 Bot API，不依赖 NapCat / QQ 客户端。</p>
+        <p class="hint" style="margin-top:10px">以普通 QQ 账号（协议端登录）工作，不需要 QQ 客户端常驻；登录与换号都在「设置 → QQ 账号登录」里完成。</p>
       </div>
       <div class="device-metrics">
         <div class="metric-row">
@@ -525,7 +565,7 @@ function renderOverview(el) {
         <h3>机器人状态 <span class="sub">${esc(b.version)}</span></h3>
         <dl class="kv">
           <dt>连接</dt><dd><span class="pill ${s.cls === 'ok' ? 'ok' : s.cls === 'bad' ? 'bad' : ''}">${esc(s.text)}</span></dd>
-          <dt>AppID</dt><dd class="mono">${esc(b.settings.appId || '未配置')}</dd>
+          <dt>QQ 账号</dt><dd class="mono">${esc(account)}</dd>
           <dt>数据目录</dt><dd class="mono">${esc(b.dataDir)}</dd>
           <dt>兼容性</dt><dd>${compat.requiredFailed?.length ? '存在必检失败' : '通过'}（Node ${esc(compat.node || '-')}）</dd>
         </dl>
@@ -629,7 +669,7 @@ function renderModeration(el) {
         `).join('') || '<div class="empty">暂无信任成员</div>'}
       </div>
       ${ro ? '' : `<div class="row" style="margin-top:10px">
-        <input id="trusted-q" class="grow" placeholder="搜索成员昵称 / openid">
+        <input id="trusted-q" class="grow" placeholder="搜索成员昵称 / QQ 号">
         <button id="trusted-search" class="btn">搜索</button>
       </div>
       <div id="trusted-results" class="list" style="margin-top:8px"></div>
@@ -654,6 +694,11 @@ function renderModeration(el) {
         <label class="field"><span>越权禁言（秒）</span><input id="g-mute" type="number" min="0" max="86400" value="${state.draft.guest.muteSeconds}"></label>
         <label class="field"><span>感情牌夹带指令禁言（秒）</span><input id="g-emomute" type="number" min="0" max="86400" value="${state.draft.guest.emotionalMuteSeconds}"></label>
       </div>
+      <div class="grid cols-3">
+        <label class="field"><span>发表情包概率（%，0 = 不发）</span><input id="g-stickerchance" type="number" min="0" max="100" value="${state.draft.guest.stickerChance ?? 30}"></label>
+        <label class="field"><span>兜底 emoji（逗号分隔）</span><input id="g-emojis" value="${esc((state.draft.guest.emojis || []).join(','))}"></label>
+      </div>
+      <label class="field"><span>表情包图片（每行一个 URL，走 NapCat 发图；留空则只发 emoji）</span><textarea id="g-stickers">${esc(lines(state.draft.guest.stickers || []))}</textarea></label>
       <label class="field"><span>人设补充（只影响闲聊语气）</span><textarea id="g-persona">${esc(state.draft.guest.persona)}</textarea></label>
       <label class="field"><span>越权拦截词（每行一个）</span><textarea id="g-keywords">${esc(lines(state.draft.guest.guardKeywords))}</textarea></label>
       <p class="hint">安全规则：管理操作、索要系统提示、扮演套设定等请求一律拒绝并警告一次；再次越权禁言 5 分钟。感情牌夹带恶意指令直接禁言 1 小时；信任成员触发时只警告并通告所有群。越权判断全在本地完成，不消耗模型。</p>
@@ -724,6 +769,9 @@ function renderModeration(el) {
     g.emotionalMuteSeconds = Number($('g-emomute').value);
     g.persona = $('g-persona').value;
     g.guardKeywords = parseLines($('g-keywords').value);
+    g.stickers = parseLines($('g-stickers').value);
+    g.stickerChance = Number($('g-stickerchance').value) || 0;
+    g.emojis = String($('g-emojis').value || '').split(/[,，\s]+/u).filter(Boolean);
     savePatch(sectionPatch(['guest']));
   });
 }
@@ -822,14 +870,28 @@ function renderJoin(el) {
 function renderAnnouncements(el) {
   const groups = groupList();
   const items = state.boot.announcements || [];
+  const napcatOn = !!(state.boot.napcat && state.boot.napcat.enabled);
   el.innerHTML = `
     <div class="card">
-      <h3>新建公告 <span class="sub">以机器人消息发送，可选定时</span></h3>
+      <h3>新建公告 <span class="sub">可选发布为“真·群公告”或普通消息</span></h3>
       <label class="field"><span>标题（可选）</span><input id="a-title" placeholder="例如：本周活动安排"></label>
       <label class="field"><span>正文</span><textarea id="a-content" placeholder="公告内容"></textarea></label>
       <div class="grid cols-3">
+        <label class="field"><span>发布方式</span>
+          <select id="a-mode">
+            <option value="text">普通消息（无需 NapCat）</option>
+            <option value="notice">真·群公告（需 NapCat + 管理员）</option>
+          </select>
+        </label>
         <label class="field"><span>定时发布时间（留空=草稿）</span><input id="a-time" type="datetime-local"></label>
+        <label class="field"><span>真公告置顶</span>
+          <select id="a-pinned">
+            <option value="0">不置顶</option>
+            <option value="1">置顶</option>
+          </select>
+        </label>
       </div>
+      ${napcatOn ? '<p class="hint">已启用 NapCat：发布方式可选手“真·群公告”，会显示在群公告栏（需机器人是群管理员/群主）。</p>' : '<p class="hint">当前未启用 NapCat：真·群公告不可用，将回落到普通消息。可在 设置 → NapCat 成员目录 里启用。</p>'}
       <div class="field"><span>目标群</span>
         <div class="row" id="a-targets">
           ${groups.map((g) => `<label class="check"><input type="checkbox" value="${esc(g.gid)}">${esc(g.name || g.gid)}</label>`).join('') || '<span class="hint">还没有群</span>'}
@@ -837,13 +899,25 @@ function renderAnnouncements(el) {
       </div>
       <button id="a-create" class="btn primary">保存公告</button>
     </div>
+    <div class="card" id="notice-manager">
+      <h3>真·群公告管理 <span class="sub">拉取 / 删除群公告（需 NapCat 且机器人是群管理员）</span></h3>
+      <div class="row">
+        <select id="n-gid">
+          <option value="">选择群…</option>
+          ${groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name || g.gid)}</option>`).join('') || ''}
+        </select>
+        <button id="n-list" class="btn primary">拉取公告</button>
+        <span id="n-hint" class="hint"></span>
+      </div>
+      <div class="list" id="n-notices"><div class="empty">请先选择群并拉取公告</div></div>
+    </div>
     <div class="card">
       <h3>公告列表</h3>
       <div class="list">
         ${items.map((x) => `
           <div class="item">
             <div class="main">
-              <div class="title">${esc(x.title || '（无标题）')} <span class="pill ${x.status === 'done' ? 'ok' : x.status === 'failed' ? 'bad' : ''}">${esc(statusLabel(x.status))}</span></div>
+              <div class="title">${esc(x.title || '（无标题）')} <span class="pill ${x.status === 'done' ? 'ok' : x.status === 'failed' ? 'bad' : ''}">${esc(statusLabel(x.status))}</span> ${x.mode === 'notice' ? '<span class="pill">真公告</span>' : ''}</div>
               <div class="meta">${esc(x.content).slice(0, 160)}</div>
               <div class="meta">目标 ${x.targets.length} 个群 · 更新 ${esc(fmtTime(x.updatedAt))}${x.publishAt ? ' · 定时 ' + esc(fmtTime(x.publishAt)) : ''}</div>
             </div>
@@ -862,6 +936,8 @@ function renderAnnouncements(el) {
       title: $('a-title').value,
       content: $('a-content').value,
       targets,
+      mode: $('a-mode').value === 'notice' ? 'notice' : 'text',
+      pinned: $('a-pinned').value === '1',
       publishAt: $('a-time').value ? new Date($('a-time').value).toISOString() : '',
     };
     const r = await req('/announcements', { method: 'POST', body: { action: 'create', input } });
@@ -892,6 +968,49 @@ function renderAnnouncements(el) {
       await loadBoot();
     });
   }
+
+  // 真·群公告：拉取 / 删除
+  const renderNotices = (notices, hint) => {
+    const box = $('n-notices');
+    $('n-hint').textContent = hint || '';
+    if (!notices || !notices.length) {
+      box.innerHTML = '<div class="empty">该群暂无公告</div>';
+      return;
+    }
+    box.innerHTML = notices.map((n) => `
+      <div class="item">
+        <div class="main">
+          <div class="title">${esc(n.message?.text || '(无文本)')}<span class="pill">${n.pinned || n.pinned ? '置顶' : ''}${n.send_to_new_member ? '新成员可见' : ''}</span></div>
+          <div class="meta">${esc(n.notice_id || n.fid || '')} · ${esc(fmtTime(n.publish_time ? new Date(Number(n.publish_time) * 1000).toISOString() : ''))}</div>
+        </div>
+        <div class="row">
+          <button class="btn danger" data-notice-del="${esc(n.notice_id || n.fid || '')}">删除</button>
+        </div>
+      </div>`).join('');
+    for (const btn of box.querySelectorAll('[data-notice-del]')) {
+      btn.addEventListener('click', async () => {
+        if (!await modal('删除群公告', '删除后不可恢复，确认继续？', '删除')) return;
+        const r = await req('/group-notices', {
+          method: 'POST',
+          body: { action: 'delete', gid: $('n-gid').value, noticeId: btn.dataset.noticeDel },
+        });
+        toast(r.ok ? '已删除' : (r.error?.message || '删除失败'), !r.ok);
+        if (r.ok) $('n-list').click();
+      });
+    }
+  };
+  $('n-list').addEventListener('click', async () => {
+    const gid = $('n-gid').value;
+    if (!gid) return toast('请先选择群', true);
+    $('n-hint').textContent = '拉取中…';
+    const r = await req('/group-notices', { method: 'POST', body: { action: 'list', gid } });
+    if (!r.ok) {
+      $('n-hint').textContent = '';
+      $('n-notices').innerHTML = `<div class="empty">${esc(r.error?.message || '拉取失败')}</div>`;
+      return toast(r.error?.message || '拉取失败', true);
+    }
+    renderNotices(r.data.notices, `共 ${r.data.notices.length} 条（${r.data.qqGroupId || ''}）`);
+  });
 }
 
 function statusLabel(status) {
@@ -948,7 +1067,7 @@ function renderGroups(el) {
         `).join('') || '<div class="empty">还没有群，机器人被拉进群并收到消息后会自动登记</div>'}
       </div>
       ${ro ? '' : `<div class="row" style="margin-top:10px">
-        <input id="g-gid" class="grow" placeholder="群 openid">
+        <input id="g-gid" class="grow" placeholder="群号">
         <input id="g-name" placeholder="群名称（可选）">
         <button id="g-add" class="btn">登记群</button>
       </div>`}
@@ -978,20 +1097,34 @@ function renderGroups(el) {
     </div>
 
     <div class="card">
-      <h3>成员查询与操作</h3>
+      <h3>成员查询与操作 <span class="sub">启用协议端成员目录后可看到完整花名册与 QQ 号</span></h3>
       <div class="row">
         <select id="mem-gid" class="grow"><option value="">全部群</option>${groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name || g.gid)}</option>`).join('')}</select>
-        <input id="mem-q" class="grow" placeholder="按昵称/openid 搜索" value="${esc(state.memberQuery)}">
+        <input id="mem-q" class="grow" placeholder="按昵称 / QQ 号 / openid 搜索" value="${esc(state.memberQuery)}">
         <button id="mem-search" class="btn">搜索</button>
+        <button id="mem-sync" class="btn primary">同步花名册</button>
       </div>
-      <p class="hint" style="margin-top:8px">成员台账只记录机器人见过的成员（入群申请、群消息）。查不到时可以先选“全部群”，或者改用 openid 搜索。</p>
+      <p class="hint" id="mem-hint" style="margin-top:8px">正在读取成员…</p>
       <div id="mem-list" class="list" style="margin-top:10px"><div class="empty">输入关键词后搜索</div></div>
+    </div>
+
+    <div class="card">
+      <h3>全体禁言与定时任务 <span class="sub">优先用协议端群级开关，不支持时逐人禁言；定时由插件自己调度</span></h3>
+      <div class="row">
+        <button id="wb-on" class="btn danger">立即全员禁言</button>
+        <button id="wb-off" class="btn">解除全员禁言</button>
+        <input id="sch-time" class="grow" style="max-width:130px" placeholder="22:30" value="22:30">
+        <select id="sch-kind"><option value="whole-ban">全员禁言</option><option value="whole-unban">解除全员禁言</option></select>
+        <label class="check"><input id="sch-daily" type="checkbox">每天重复</label>
+        <button id="sch-add" class="btn primary">添加定时任务</button>
+      </div>
+      <div id="sch-list" class="list" style="margin-top:10px"><div class="empty">正在读取定时任务…</div></div>
     </div>`;
 
   if (!ro) {
     $('g-add').addEventListener('click', async () => {
       const gid = $('g-gid').value.trim();
-      if (!gid) return toast('请填写群 openid', true);
+      if (!gid) return toast('请填写群号', true);
       const r = await req('/groups', { method: 'POST', body: { action: 'add', gid, name: $('g-name').value.trim() } });
       toast(r.ok ? '已登记' : (r.error?.message || '登记失败'), !r.ok);
       await loadBoot();
@@ -1027,33 +1160,160 @@ function renderGroups(el) {
     savePatch(patch);
   });
 
+  const setHint = (napcat, total) => {
+    const hint = $('mem-hint');
+    if (!hint) return;
+    const parts = [`共 ${total} 人`];
+    if (!napcat) {
+      parts.push('NapCat 成员目录未接入：只能看到机器人见过的成员');
+    } else if (!napcat.enabled) {
+      parts.push('NapCat 成员目录未启用：可在设置里开启完整花名册');
+    } else if (napcat.lastError) {
+      parts.push(`NapCat 同步异常：${napcat.lastError}`);
+    } else if (!napcat.connected && !napcat.directoryMembers) {
+      parts.push('NapCat 未连接：请确认协议端已启动');
+    } else {
+      parts.push(`NapCat 已接入 · 花名册 ${napcat.directoryMembers} 人${napcat.lastSyncAt ? ` · 上次同步 ${fmtTime(napcat.lastSyncAt)}` : ''}`);
+    }
+    hint.textContent = parts.join(' · ');
+    hint.classList.toggle('warn', !!(napcat?.lastError));
+  };
+
   const search = async () => {
-    const gid = $('mem-gid').value;
-    state.memberQuery = $('mem-q').value;
+    const gid = $('mem-gid')?.value ?? '';
+    state.memberQuery = $('mem-q')?.value ?? '';
     const r = await req(`/members?gid=${encodeURIComponent(gid)}&q=${encodeURIComponent(state.memberQuery)}`);
     if (!r.ok) return toast(r.error?.message || '查询失败', true);
     const list = $('mem-list');
     if (!list) return;
-    list.innerHTML = r.data.members.map((m) => `
-      <div class="item"><div class="main"><div class="title">${esc(m.name || '未备注')}</div>
-      <div class="meta mono">${esc(m.uid)} · 发言 ${m.messageCount || 0} 次</div></div>
-      <div class="row">
-        <button class="btn" data-mute="${esc(m.uid)}">禁言</button>
-        <button class="btn" data-unmute="${esc(m.uid)}">解禁</button>
-        <button class="btn danger" data-kick="${esc(m.uid)}">移出</button>
-      </div></div>`).join('') || '<div class="empty">没有匹配成员</div>';
-    for (const btn of list.querySelectorAll('[data-mute]')) btn.addEventListener('click', () => memberAction(gid, btn.dataset.mute, 'mute'));
-    for (const btn of list.querySelectorAll('[data-unmute]')) btn.addEventListener('click', () => memberAction(gid, btn.dataset.unmute, 'unmute'));
-    for (const btn of list.querySelectorAll('[data-kick]')) btn.addEventListener('click', () => memberAction(gid, btn.dataset.kick, 'kick'));
+    const rows = r.data.members || [];
+    setHint(r.data.napcat, r.data.total ?? rows.length);
+    list.innerHTML = rows.map((m) => {
+      const uid = String(m.uid || '');
+      const qq = String(m.qq || '');
+      const source = m.source === 'official+napcat' ? '官方+NapCat'
+        : m.source === 'napcat' ? 'NapCat 花名册'
+          : m.pending ? '待审批申请' : '本地台账';
+      const tags = [];
+      if (m.isBot) tags.push('机器人');
+      if (m.role === 'owner') tags.push('群主');
+      else if (m.role === 'admin') tags.push('管理员');
+      if (m.whitelisted) tags.push('白名单');
+      if (m.trusted) tags.push('信任');
+      const meta = [
+        qq ? `QQ ${qq}` : 'QQ 未关联',
+        uid ? `openid ${uid}` : '',
+        source,
+        tags.join(' / '),
+        `发言 ${m.messageCount || 0} 次`,
+        m.lastSeenAt ? `最近 ${fmtTime(m.lastSeenAt)}` : '',
+      ].filter(Boolean).join(' · ');
+      const target = `data-qq="${esc(qq)}" data-uid="${esc(uid)}" data-gid="${esc(m.gid || gid)}"`;
+      const actions = m.pending
+        ? ''
+        : `<div class="row">
+        <button class="btn" data-act="mute" ${target}>禁言</button>
+        <button class="btn" data-act="unmute" ${target}>解禁</button>
+        <button class="btn danger" data-act="kick" ${target}>移出</button>
+      </div>`;
+      const dispName = String(m.name || m.nickname || '').trim()
+        || (uid ? `未命名(${uid.slice(-6)})` : '未备注');
+      return `<div class="item"><div class="main"><div class="title">${esc(dispName)}</div>
+      <div class="meta mono">${esc(meta)}</div></div>${actions}</div>`;
+    }).join('') || '<div class="empty">没有匹配成员</div>';
+    for (const btn of list.querySelectorAll('[data-act]')) {
+      btn.addEventListener('click', () => memberAction(btn.dataset.gid || gid, { uid: btn.dataset.uid, qq: btn.dataset.qq }, btn.dataset.act));
+    }
   };
   $('mem-search').addEventListener('click', search);
+  $('mem-gid').addEventListener('change', search);
   $('mem-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
+  $('mem-sync').addEventListener('click', async () => {
+    if (!admin()) return toast('需要最高管理员权限', true);
+    const gid = $('mem-gid')?.value ?? '';
+    $('mem-sync').disabled = true;
+    $('mem-sync').textContent = '同步中…';
+    try {
+      const r = await req('/members/sync', { method: 'POST', body: { gid } });
+      if (!r.ok) throw new Error(r.error?.message || '同步失败');
+      const data = r.data || {};
+      toast(`已同步 ${data.syncedGroups || 0} 个群、${data.syncedMembers || 0} 人${data.warning ? `（${data.warning}）` : ''}`);
+      await search();
+    } catch (error) {
+      toast(error.message || '同步失败', true);
+    } finally {
+      const btn = $('mem-sync');
+      if (btn) { btn.disabled = false; btn.textContent = '同步花名册'; }
+    }
+  });
+  const schList = async () => {
+    const gid = $('mem-gid')?.value ?? '';
+    const box = $('sch-list');
+    if (!box) return;
+    const r = await req('/schedules');
+    if (!r.ok) { box.innerHTML = `<div class="empty">${esc(r.error?.message || '读取失败')}</div>`; return; }
+    const rows = (r.data.schedules || []).filter((x) => !gid || x.gid === gid);
+    if (!rows.length) { box.innerHTML = '<div class="empty">还没有定时任务</div>'; return; }
+    box.innerHTML = rows.map((x) => {
+      const when = x.repeat === 'daily' ? `每天 ${esc(x.time)}` : esc(fmtTime(new Date(x.at).toISOString()));
+      const what = x.kind === 'whole-ban' ? '全员禁言' : x.kind === 'whole-unban' ? '解除全员禁言'
+        : x.kind === 'mute' ? '禁言成员' : '解除成员禁言';
+      return `<div class="item"><div class="main"><div class="title">${when}</div>
+        <div class="meta">${esc(what)}</div></div>
+        <button class="btn danger" data-cancel="${esc(x.id)}">取消</button></div>`;
+    }).join('');
+    for (const btn of box.querySelectorAll('[data-cancel]')) {
+      btn.addEventListener('click', async () => {
+        const rr = await req('/schedules/cancel', { method: 'POST', body: { id: btn.dataset.cancel } });
+        toast(rr.ok ? '已取消' : (rr.error?.message || '取消失败'), !rr.ok);
+        await schList();
+      });
+    }
+  };
+  $('sch-add').addEventListener('click', async () => {
+    const gid = $('mem-gid')?.value ?? '';
+    if (!gid) return toast('先在上方选择群', true);
+    const m = String($('sch-time').value || '').trim().match(/^(\d{1,2}):(\d{2})$/u);
+    if (!m) return toast('时间格式写成 22:30', true);
+    const at = new Date();
+    at.setSeconds(0, 0);
+    at.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+    const daily = $('sch-daily').checked;
+    const r = await req('/schedules', {
+      method: 'POST',
+      body: {
+        gid, kind: $('sch-kind').value, at: at.getTime(),
+        repeat: daily ? 'daily' : 'once', time: `${String(m[1]).padStart(2, '0')}:${m[2]}`,
+      },
+    });
+    toast(r.ok ? '已添加定时任务' : (r.error?.message || '添加失败'), !r.ok);
+    await schList();
+  });
+  $('wb-on').addEventListener('click', async () => {
+    const gid = $('mem-gid')?.value ?? '';
+    if (!gid) return toast('先在上方选择群', true);
+    const r = await req('/whole-ban', { method: 'POST', body: { gid, enable: true } });
+    toast(r.ok ? `已批量禁言 ${r.data?.done ?? ''} 人（失败 ${r.data?.failed ?? 0}）` : (r.error?.message || '执行失败'), !r.ok);
+  });
+  $('wb-off').addEventListener('click', async () => {
+    const gid = $('mem-gid')?.value ?? '';
+    if (!gid) return toast('先在上方选择群', true);
+    const r = await req('/whole-ban', { method: 'POST', body: { gid, enable: false } });
+    toast(r.ok ? `已批量解禁 ${r.data?.done ?? ''} 人` : (r.error?.message || '执行失败'), !r.ok);
+  });
+  void schList();
+  void search();
 }
 
-async function memberAction(gid, uid, action) {
+async function memberAction(gid, target, action) {
   if (!admin()) return toast('需要最高管理员权限', true);
+  const uid = String(target?.uid || '').trim();
+  const qq = String(target?.qq || '').trim();
+  if (!uid && !qq) return toast('缺少成员标识', true);
   if (action === 'kick' && !await modal('移出成员', '将把该成员移出群聊，确认继续？', '移出')) return;
-  const r = await req('/members/action', { method: 'POST', body: { action, gid, uid } });
+  const body = uid ? { action, gid, uid } : { action, gid, qq };
+  const r = await req('/members/action', { method: 'POST', body });
   toast(r.ok ? '操作已完成' : (r.error?.message || '操作失败'), !r.ok);
 }
 
@@ -1075,13 +1335,13 @@ function renderBlacklist(el) {
     <div class="card">
       <h3>手动加入黑名单</h3>
       <div class="row" style="margin-bottom:10px">
-        <input id="b-q" class="grow" placeholder="搜索成员昵称 / openid">
+        <input id="b-q" class="grow" placeholder="搜索成员昵称 / QQ 号">
         <button id="b-search" class="btn">搜索</button>
       </div>
       <div id="b-results" class="list" style="margin-bottom:10px"></div>
       <div class="grid cols-3">
         <label class="field"><span>群</span><select id="b-gid">${groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name || g.gid)}</option>`).join('')}</select></label>
-        <label class="field"><span>成员 openid</span><input id="b-uid"></label>
+        <label class="field"><span>成员 QQ 号</span><input id="b-uid"></label>
         <label class="field"><span>昵称（可选）</span><input id="b-name"></label>
       </div>
       <label class="field"><span>原因</span><input id="b-reason" placeholder="例如：多次发广告"></label>
@@ -1124,8 +1384,8 @@ function renderAudit(el) {
       <h3>审计日志</h3>
       <div class="row">
         <select id="au-kind"><option value="">全部类型</option>${['moderation', 'join', 'announce', 'command', 'config'].map((x) => `<option value="${x}">${x}</option>`).join('')}</select>
-        <input id="au-gid" placeholder="群 openid" class="grow">
-        <input id="au-uid" placeholder="成员 openid" class="grow">
+        <input id="au-gid" placeholder="群号" class="grow">
+        <input id="au-uid" placeholder="成员 QQ 号" class="grow">
         <button id="au-search" class="btn">查询</button>
         <button id="au-csv" class="btn">导出 CSV</button>
       </div>
@@ -1214,27 +1474,84 @@ function renderSettings(el) {
   const aiQuiz = ai.quiz || {};
   const aiStatus = state.boot.ai || {};
   const net = state.net;
+  const napcat = s.napcat || {};
+  const napcatState = state.boot.napcat || {};
+  const nat = s.natural || {};
+  const natKeywords = (Array.isArray(nat.keywords) ? nat.keywords : [])
+    .map((k) => `${k.phrase} = ${k.action}`).join('\n');
   const pwdRule = sec.passwordMin
     ? `新密码至少 ${sec.passwordMin} 位，必须同时包含字母和数字，且不能与另一个角色的密码相同。`
     : '新密码必须同时包含字母和数字，且不能与另一个角色的密码相同。';
   el.innerHTML = `
     <div class="card">
-      <h3>机器人凭据 <span class="sub">普通管理员修改需三次确认</span></h3>
-      <div class="grid cols-2">
-        <label class="field"><span>AppID</span><input id="s-appid" value="${esc(s.appId)}" ${disabledAttr(ro)}></label>
-        <label class="field"><span>AppSecret（留空保持不变）</span><input id="s-secret" type="password" placeholder="${s.appSecret ? '已设置，留空不变' : '未设置'}" ${disabledAttr(ro)}></label>
+      <h3>界面语言 <span class="sub">默认简体中文；语言包在 locale/ 下，可直接替换文件</span></h3>
+      <label class="field"><span>语言</span>
+        <select id="s-language">
+          <option value="zh-CN" ${(s.language || 'zh-CN') === 'zh-CN' ? 'selected' : ''}>简体中文</option>
+          <option value="en" ${s.language === 'en' ? 'selected' : ''}>English</option>
+        </select>
+      </label>
+      <p class="hint">首次部署必须先选语言；未选择前插件服务不会启动。切换后立即生效。</p>
+    </div>
+
+    <div class="card">
+      <h3>QQ 账号登录 <span class="sub">普通 QQ 账号 · 不用填 AppID，也不用开 QQ 客户端</span>
+        <span id="s-login-pill" class="pill off">读取中…</span></h3>
+      <div id="s-login-body" class="s" style="line-height:1.8"></div>
+      <div id="s-login-qr" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="s-login-qr-btn" class="btn" type="button" ${disabledAttr(ro)}>扫码登录</button>
+        <button id="s-login-refresh" class="btn ghost" type="button">刷新状态</button>
+        <span id="s-login-quick" class="row"></span>
       </div>
+      <p class="hint" style="margin-top:8px">登录、换号都在这里完成：二维码由本机协议端生成，手机 QQ 扫码确认即可；这台机器上登录过的账号可以一键快速登录。换号请先在协议端退出登录。</p>
+      <div class="grid cols-2" style="margin-top:10px">
+        <label class="field"><span>协议端 WebUI 地址</span><input id="s-napcat-webui-url" value="${esc(napcat.webuiUrl || '')}" placeholder="http://127.0.0.1:6099" ${disabledAttr(ro)}></label>
+        <label class="field"><span>WebUI 令牌（可留空，留空自动读 webui.json）</span><input id="s-napcat-webui-token" type="password" placeholder="${napcat.webuiToken ? '已设置，留空不变' : '自动读取'}" ${disabledAttr(ro)}></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>连接行为</h3>
       <div class="row">
-        <label class="check"><input id="s-auto" type="checkbox" ${s.autoConnect ? 'checked' : ''} ${disabledAttr(ro)}>启动时自动连接</label>
-        <label class="check"><input id="s-watch" type="checkbox" ${s.watchJoinRequests ? 'checked' : ''} ${disabledAttr(ro)}>自动轮询入群申请</label>
+        <label class="check"><input id="s-auto" type="checkbox" ${s.autoConnect ? 'checked' : ''} ${disabledAttr(ro)}>插件加载时自动连接协议端</label>
+        <label class="check"><input id="s-watch" type="checkbox" ${s.watchJoinRequests ? 'checked' : ''} ${disabledAttr(ro)}>自动同步入群申请</label>
       </div>
+      <p class="hint">插件以普通 QQ 账号身份工作（协议端登录）：群消息、@、禁言、踢人、群公告、入群审批都用这个账号的群管理权限。不需要 AppID/AppSecret。</p>
+    </div>
+
+    <div class="card">
+      <h3>协议端连接（OneBot / NapCat） <span class="sub">收发消息、群成员花名册、群公告都走这里</span></h3>
+      <p class="hint" style="line-height:1.8">地址默认 <span class="mono">ws://127.0.0.1:3001</span>；点「自动探测」会直接读协议端的 <span class="mono">onebot11_&lt;QQ&gt;.json</span>，把端口和 token 填好。协议端没起时，插件可以按「启动命令」自己把它拉起来。</p>
+      <div class="row">
+        <label class="check"><input id="s-napcat-enabled" type="checkbox" ${napcat.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用成员目录</label>
+        <label class="check"><input id="s-napcat-detect" type="checkbox" ${napcat.autoDetect !== false ? 'checked' : ''} ${disabledAttr(ro)}>连不上时自动探测地址</label>
+        <label class="check"><input id="s-napcat-auto" type="checkbox" ${napcat.autoSync ? 'checked' : ''} ${disabledAttr(ro)}>打开成员页时自动同步</label>
+        <label class="check"><input id="s-napcat-nocache" type="checkbox" ${napcat.noCache !== false ? 'checked' : ''} ${disabledAttr(ro)}>绕过协议端缓存（no_cache）</label>
+        <span class="pill ${napcatState.connected ? 'ok' : 'off'}">${esc(napcatState.connected ? '已连接' : (napcatState.lastError ? '连接异常' : '未连接'))}</span>
+      </div>
+      <div class="grid cols-2" style="margin-top:10px">
+        <label class="field"><span>WebSocket 地址</span><input id="s-napcat-url" value="${esc(napcat.wsUrl || '')}" placeholder="ws://127.0.0.1:3001" ${disabledAttr(ro)}></label>
+        <label class="field"><span>Token（可留空；留空保持不变）</span><input id="s-napcat-token" type="password" placeholder="${napcat.token ? '已设置，留空不变' : '未设置'}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>缓存时长（分钟，0 = 每次重新拉取）</span><input id="s-napcat-ttl" type="number" min="0" max="1440" value="${Math.round((Number(napcat.cacheTtlMs) || 0) / 60000)}" ${disabledAttr(ro)}></label>
+        <label class="field"><span>调用超时（毫秒）</span><input id="s-napcat-timeout" type="number" min="1000" max="15000" step="500" value="${Number(napcat.timeoutMs) || 4000}" ${disabledAttr(ro)}></label>
+      </div>
+      <p class="hint" style="line-height:1.8">地址模板：NapCat 默认 <span class="mono">ws://127.0.0.1:3001</span>；LLOneBot 默认 <span class="mono">ws://127.0.0.1:3000</span>；OneBot v11 实现默认 <span class="mono">ws://127.0.0.1:6700</span>。端口与 token 在协议端配置的 <span class="mono">onebot11_&lt;登录QQ&gt;.json → websocketServers[].port / token</span> 里；没开鉴权时 token 留空。</p>
+      <label class="field" style="margin-top:8px"><span>手动群映射（每行一条：官方群号 = QQ 群号；留空则按群名自动匹配）</span><textarea id="s-napcat-map" placeholder="0123456789ABCDEF0123456789ABCDEF = 123456789&#10;（群名与协议端一致时会自动匹配，通常不用手填）" ${disabledAttr(ro)}>${esc(lines(Object.entries(napcat.groupMap || {}).map(([gid, qq]) => `${gid} = ${qq}`)))}</textarea></label>
+      <div class="row" style="margin-top:8px">
+        <button id="s-napcat-detect-btn" class="btn">自动探测</button>
+        <button id="s-napcat-test" class="btn">测试连接</button>
+        <span id="s-napcat-result" class="hint">${esc(napcatState.lastError || (napcatState.connected ? `已连接 ${napcatState.url || ''}` : ''))}</span>
+      </div>
+      ${(napcatState.groups || []).length ? `<p class="hint" style="margin-top:6px">协议端可见群：${napcatState.groups.map((g) => `${esc(g.name || g.qqGroupId)}（${esc(g.qqGroupId)}，${g.memberCount || 0} 人）`).join(' · ')}</p>` : ''}
+      ${(napcatState.mappings || []).length ? `<p class="hint" style="margin-top:2px">目录匹配：${napcatState.mappings.map((m) => `${esc(m.name || m.gid)} → ${m.qqGroupId ? `QQ ${esc(m.qqGroupId)}（${m.directoryCount || 0} 人${m.auto ? '，自动' : '，手动'}）` : '未匹配'}`).join(' · ')}</p>` : ''}
     </div>
 
     <div class="card">
       <h3>变更通知对象 <span class="sub">仅普通管理员修改时 @</span></h3>
       <div class="grid cols-2">
         <label class="field"><span>通知对象昵称（必填）</span><input id="s-notify-name" value="${esc(s.panel.notifyName)}" placeholder="例如：群主昵称" ${disabledAttr(ro)}></label>
-        <label class="field"><span>成员 openid（可留空）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="不知道就留空；同名时再填" ${disabledAttr(ro)}></label>
+        <label class="field"><span>成员 QQ 号（可留空）</span><input id="s-notify-uid" value="${esc(s.panel.notifyOpenid)}" placeholder="不知道就留空；同名时再填" ${disabledAttr(ro)}></label>
       </div>
       <label class="field"><span>从成员列表选择（自动填入昵称与 openid）</span>
         <select id="s-notify-member" ${disabledAttr(ro)}><option value="">加载中…</option></select></label>
@@ -1242,7 +1559,7 @@ function renderSettings(el) {
         <button id="s-notify-check" class="btn">验证通知对象</button>
         <span id="s-notify-result" class="hint"></span>
       </div>
-      <p class="hint">QQ 官方 Bot API 只提供成员 openid，不提供 QQ 号，所以无法按 QQ 号查人。留空 openid 时按昵称匹配：群内该昵称唯一就 @ 他；有同名成员则需要补 openid 或从上面列表选人。@ 仅在普通管理员修改机器人级设置时生效。</p>
+      <p class="hint">QQ 官方 Bot API 只提供成员 QQ 号，不提供 QQ 号，所以无法按 QQ 号 @ 人（开启 NapCat 成员目录后，成员列表会额外显示 QQ 号，但通知仍按 openid/昵称匹配）。留空 openid 时按昵称匹配：群内该昵称唯一就 @ 他；有同名成员则需要补 openid 或从上面列表选人。@ 仅在普通管理员修改机器人级设置时生效。</p>
     </div>
 
     <div class="card">
@@ -1265,9 +1582,9 @@ function renderSettings(el) {
         <label class="field"><span>前缀</span><input id="s-cmd-prefix" value="${esc(s.commands.prefix)}" style="width:80px" ${disabledAttr(ro)}></label>
       </div>
       <p class="hint">示例：@机器人 看看群里有多少人；@机器人 把“某某”踢出群聊并拉黑；@机器人 禁言“某某”10分钟。也可以直接 @ 要处理的成员再说动作。同一成员 @ 过一次后，上表秒数内继续说话不必重复 @（填 0 关闭）。白名单成员可用 /设备 查看设备与资源占用、/余额 查询 AI 接口余额、/重启 完整重启插件并自动登录（/重启 需二次确认，完成后会回报结果；不受“启用指令”开关限制）。</p>
-      <label class="field"><span>允许使用的成员 openid（每行一个；信任成员自动允许）</span><textarea id="s-cmd-users" ${disabledAttr(ro)}>${esc(lines(s.commands.allowUsers))}</textarea></label>
+      <label class="field"><span>允许使用的成员 QQ 号（每行一个；信任成员自动允许）</span><textarea id="s-cmd-users" ${disabledAttr(ro)}>${esc(lines(s.commands.allowUsers))}</textarea></label>
       <div class="row" style="margin-bottom:8px">
-        <input id="cmd-q" class="grow" placeholder="搜索成员昵称 / openid">
+        <input id="cmd-q" class="grow" placeholder="搜索成员昵称 / QQ 号">
         <button id="cmd-search" class="btn">搜索</button>
       </div>
       <div id="cmd-results" class="list" style="margin-bottom:10px"></div>
@@ -1275,11 +1592,24 @@ function renderSettings(el) {
     </div>
 
     <div class="card">
-      <h3>AI 辅助审核 <span class="sub">本地词表的补充，模型失败自动回退</span></h3>
+      <h3>自然语言决策 <span class="sub">v1.9.0：先问 AI，关键词只兜底</span></h3>
+      <div class="row">
+        <label class="check"><input id="s-nat-aifirst" type="checkbox" ${nat.aiFirst !== false ? 'checked' : ''} ${disabledAttr(ro)}>所有自然语言指令先经过 AI 决策</label>
+        <label class="field"><span>关键词重排周期（周，最多 10 周）</span><input id="s-nat-review" type="number" min="1" max="10" value="${Number(nat.reviewWeeks) || 3}" style="width:90px" ${disabledAttr(ro)}></label>
+        <label class="field"><span>最近 7 天用量达到</span><input id="s-nat-weekly" type="number" min="1" max="5000" value="${Number(nat.weeklyCommands) || 100}" style="width:90px" ${disabledAttr(ro)}></label>
+        <label class="field"><span>提醒对象 QQ 号（留空=第一个信任成员）</span><input id="s-nat-notify" value="${esc(nat.notifyUid || '')}" style="width:260px" ${disabledAttr(ro)}></label>
+      </div>
+      <label class="field"><span>保留的快捷关键词（最多 15 个，每行“说法 = 动作”）</span><textarea id="s-nat-keywords" placeholder="列出群成员 = list-members&#10;禁言 = mute&#10;解禁 = unmute" ${disabledAttr(ro)}>${esc(natKeywords)}</textarea></label>
+      <p class="hint">只有 AI 超时 / 不可用时才会用到这些关键词；到重排周期（默认 3 周，最多 10 周）或最近 7 天用满上面的次数（默认 100 次）时，插件会按最近常用动作自动重排，并 @ 提醒对象。关键词最多保存 15 条，动作名可参考「管理功能」清单。</p>
+    </div>
+
+    <div class="card">
+      <h3>AI 辅助审核 <span class="sub">总开关关闭后所有 AI 功能停用，全部走本地规则</span></h3>
       <p class="hint" style="margin-bottom:10px;line-height:1.8">
         新手这样填：① 已经装好 dsh 模型 → 选「DSH 当前会话模型」，不用填其他；② 想用其他厂商 → 选「OpenAI 兼容接口」，点“快速选择厂商”，再填 API Key；③ 保存后点“测试当前模型”，能看到判定结果就说明配通了。
       </p>
       <div class="row">
+        <label class="check"><input id="ai-master" type="checkbox" ${ai.master !== false ? 'checked' : ''} ${disabledAttr(ro)}>AI 总开关（关闭后所有 AI 功能失效）</label>
         <label class="check"><input id="ai-enabled" type="checkbox" ${ai.enabled ? 'checked' : ''} ${disabledAttr(ro)}>启用 AI 审核</label>
         <label class="check"><input id="ai-vision" type="checkbox" ${aiVision.enabled ? 'checked' : ''} ${disabledAttr(ro)}>分析图片（需视觉模型）</label>
         <label class="field"><span>单条最多图片</span><input id="ai-max-images" type="number" min="1" max="5" value="${Number(aiVision.maxImages) || 3}" ${disabledAttr(ro)}></label>
@@ -1374,10 +1704,9 @@ function renderSettings(el) {
       <h3>配置备份与恢复</h3>
       <div class="row">
         <button id="cfg-export" class="btn">导出配置 JSON</button>
-        <label class="check"><input id="cfg-secrets" type="checkbox">包含 AppSecret</label>
         ${admin() ? '<button id="cfg-import" class="btn danger">导入配置</button>' : ''}
       </div>
-      <p class="hint">导出的文件包含词表、按群配置、公告、黑名单；默认不含 AppSecret。</p>
+      <p class="hint">导出的文件包含词表、按群配置、公告、黑名单；不含任何密钥（AI 密钥、协议端 token）。</p>
     </div>
 
     <div class="card">
@@ -1452,11 +1781,13 @@ function renderSettings(el) {
     }
     const list = r.data.members || [];
     const opts = list.map((m) => {
-      const label = `${m.name || '(无昵称)'} · ${m.gid} · ${m.uid}`;
-      const value = JSON.stringify({ name: m.name || '', uid: m.uid });
+      const label = m.uid
+        ? `${m.name || '(无昵称)'} · ${m.gid} · ${m.uid}`
+        : `${m.name || '(无昵称)'} · ${m.gid} · QQ ${m.qq}（NapCat）`;
+      const value = JSON.stringify({ name: m.name || '', uid: m.uid || '' });
       return `<option value="${esc(value)}">${esc(label)}</option>`;
     }).join('');
-    sel.innerHTML = '<option value="">选择成员（自动填昵称与 openid）</option>'
+    sel.innerHTML = '<option value="">选择成员（自动填昵称与 QQ 号）</option>'
       + (opts || '<option value="">暂无成员（让他在群里发言后刷新）</option>');
   })();
   $('s-notify-member').addEventListener('change', () => {
@@ -1512,6 +1843,38 @@ function renderSettings(el) {
   });
   syncAiProvider();
 
+  $('s-napcat-detect-btn')?.addEventListener('click', async () => {
+    const out = $('s-napcat-result');
+    if (out) out.textContent = '正在探测本机协议端…';
+    const r = await req('/napcat/discover', { method: 'POST', body: {} });
+    if (!r.ok) {
+      if (out) out.textContent = r.error?.message || '没有发现可用的 NapCat / LLOneBot';
+      return toast(r.error?.message || '没有发现可用的协议端', true);
+    }
+    const d = r.data || {};
+    const enabled = $('s-napcat-enabled');
+    const url = $('s-napcat-url');
+    if (enabled) enabled.checked = true;
+    if (url && d.wsUrl) url.value = d.wsUrl;
+    if (out) {
+      out.textContent = `已发现：${d.nickname || '未知账号'}（${d.selfId || '-'}）· ${d.wsUrl || ''}${d.tokenSet ? '（带 token，已保存）' : ''}，参数已自动填入`;
+    }
+    toast('已探测到 NapCat，参数已填入（记得保存）');
+  });
+
+  $('s-napcat-test')?.addEventListener('click', async () => {
+    const out = $('s-napcat-result');
+    if (out) out.textContent = '连接测试中…';
+    const r = await req('/napcat/test', { method: 'POST', body: {} });
+    if (!r.ok) {
+      if (out) out.textContent = r.error?.message || '连接失败';
+      return toast(r.error?.message || '连接失败', true);
+    }
+    const d = r.data || {};
+    if (out) out.textContent = `已连接：${d.nickname || '未知账号'}（${d.selfId || '-'}），协议端可见 ${(d.groups || []).length} 个群`;
+    toast('NapCat 连接正常');
+  });
+
   $('cmd-search').addEventListener('click', async () => {
     const list = await searchMembers($('cmd-q').value, '');
     paintMemberResults($('cmd-results'), list, (m) => {
@@ -1524,10 +1887,83 @@ function renderSettings(el) {
   });
   $('cmd-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('cmd-search').click(); });
 
+  /* QQ 账号登录（协议端）：状态 / 扫码 / 快速登录，都在设置页完成，不用开 QQ 客户端 */
+  function paintLogin(data) {
+    const pill = $('s-login-pill');
+    const body = $('s-login-body');
+    const webui = data?.webui || null;
+    const loggedIn = !!webui?.isLogin;
+    if (pill) {
+      const tone = !webui ? 'off' : loggedIn ? 'ok' : (webui.reachable ? 'warn' : 'bad');
+      pill.className = `pill ${tone}`;
+      pill.textContent = !webui ? '读取中…'
+        : loggedIn ? '已登录'
+          : (webui.reachable ? (webui.loginPhase === 'qrcode_scanned' ? '已扫码，待确认' : '未登录') : '协议端不可达');
+    }
+    if (!body) return;
+    const rows = [];
+    if (webui?.reason) rows.push(`<div class="hint">${esc(webui.reason)}</div>`);
+    if (webui?.reachable) {
+      rows.push(`<div>当前账号：<b>${esc(loggedIn ? (webui.nick || '未知昵称') : '未登录')}</b>`
+        + `${webui.uin ? ` <span class="mono">${esc(webui.uin)}</span>` : ''}</div>`);
+      rows.push(`<div class="hint">核心：${esc(webui.coreReady ? '在线' : (webui.isOffline ? '离线' : '启动中'))}`
+        + ` · WebUI：<span class="mono">${esc(webui.webuiUrl || '')}</span>`
+        + ` · 令牌：${esc(webui.tokenSource === 'auto' ? '自动读取' : (webui.tokenSource === 'settings' ? '面板填写' : '-'))}</div>`);
+    }
+    if (webui?.loginError) rows.push(`<div class="hint" style="color:var(--bad)">登录错误：${esc(webui.loginError)}</div>`);
+    body.innerHTML = rows.join('');
+    const quickBox = $('s-login-quick');
+    if (!quickBox) return;
+    const quick = (!loggedIn && data?.quick) || [];
+    quickBox.innerHTML = quick.map((q) => `<button class="btn ghost" data-uin="${esc(q.uin)}" type="button">${esc(q.nick || q.uin)}（${esc(q.uin)}）</button>`).join(' ');
+    quickBox.querySelectorAll('button[data-uin]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const r = await req('/napcat/login/quick', { method: 'POST', body: { uin: btn.dataset.uin } });
+        if (!r.ok) { toast(r.error?.message || '快速登录失败', true); btn.disabled = false; return; }
+        toast(`已提交登录 ${btn.dataset.uin}，几秒后生效`);
+        setTimeout(() => { void loadLogin(); }, 3000);
+      });
+    });
+  }
+  async function loadLogin() {
+    const r = await req('/napcat/login');
+    if (state.loginTimer) { clearInterval(state.loginTimer); state.loginTimer = null; }
+    if (!r.ok) { toast(r.error?.message || '读取登录状态失败', true); return null; }
+    paintLogin(r.data);
+    const webui = r.data?.webui;
+    if (webui && webui.reachable && !webui.isLogin) {
+      state.loginTimer = setInterval(async () => {
+        if (!$('s-login-body')) { clearInterval(state.loginTimer); state.loginTimer = null; return; }
+        const s2 = await req('/napcat/login');
+        if (!s2.ok) return;
+        paintLogin(s2.data);
+        if (s2.data?.webui?.isLogin) {
+          clearInterval(state.loginTimer);
+          state.loginTimer = null;
+          $('s-login-qr').innerHTML = '';
+          toast('QQ 已登录：' + (s2.data.account?.nickname || s2.data.account?.selfId || ''));
+          void loadBoot();
+        }
+      }, 2500);
+    }
+    return r.data;
+  }
+  async function showLoginQr(refresh) {
+    const box = $('s-login-qr');
+    const r = await req('/napcat/login/qr', { method: 'POST', body: { refresh: !!refresh } });
+    if (!r.ok) { toast(r.error?.message || '取二维码失败', true); return; }
+    if (box) {
+      box.innerHTML = `<div class="row" style="align-items:flex-start;gap:14px">
+        <img src="${r.data.dataUrl}" alt="QQ 登录二维码" style="width:168px;height:168px;border-radius:8px;background:#fff">
+        <div class="hint" style="max-width:340px">用手机 QQ 扫码并确认登录；二维码约 2 分钟有效，过期重新点「扫码登录」。</div></div>`;
+    }
+  }
+  $('s-login-refresh')?.addEventListener('click', () => { void loadLogin(); });
+  $('s-login-qr-btn')?.addEventListener('click', () => { void showLoginQr($('s-login-qr')?.innerHTML ? true : false); });
+  void loadLogin();
+
   $('s-save').addEventListener('click', async () => {
-    s.appId = $('s-appid').value.trim();
-    const secret = $('s-secret').value;
-    if (secret) s.appSecret = secret;
     s.autoConnect = $('s-auto').checked;
     s.watchJoinRequests = $('s-watch').checked;
     s.panel.enabled = $('s-panel').checked;
@@ -1536,7 +1972,7 @@ function renderSettings(el) {
     const notifyName = $('s-notify-name').value.trim();
     const notifyUid = $('s-notify-uid').value.trim();
     if (!notifyName && notifyUid) {
-      return toast('填写 openid 时请同时填写昵称', true);
+      return toast('填写 QQ 号时请同时填写昵称', true);
     }
     var pendingVerify = false;
     if (notifyName) {
@@ -1555,6 +1991,7 @@ function renderSettings(el) {
     s.commands.prefix = $('s-cmd-prefix').value.trim() || '/';
     s.commands.allowUsers = parseLines($('s-cmd-users').value);
     s.commands.ruleText = $('s-rule').value;
+    s.ai.master = $('ai-master').checked;
     s.ai.enabled = $('ai-enabled').checked;
     s.ai.provider = $('ai-provider').value === 'dsh' ? 'dsh' : 'openai';
     s.ai.baseUrl = $('ai-base').value.trim();
@@ -1581,7 +2018,42 @@ function renderSettings(el) {
     s.ai.quiz.enabled = $('ai-quiz').checked;
     s.ai.quiz.mode = $('ai-quiz-mode').value;
     s.ai.quiz.judge = $('ai-quiz-judge').checked;
-    await savePatch(sectionPatch(['appId', 'appSecret', 'autoConnect', 'watchJoinRequests', 'panel', 'commands', 'ai']));
+    s.napcat = s.napcat || {};
+    s.napcat.enabled = $('s-napcat-enabled').checked;
+    s.napcat.autoSync = $('s-napcat-auto').checked;
+    s.napcat.autoDetect = $('s-napcat-detect').checked;
+    s.napcat.noCache = $('s-napcat-nocache').checked;
+    s.napcat.wsUrl = $('s-napcat-url').value.trim();
+    const napcatToken = $('s-napcat-token').value;
+    if (napcatToken) s.napcat.token = napcatToken;
+    s.napcat.webuiUrl = $('s-napcat-webui-url').value.trim();
+    const webuiToken = $('s-napcat-webui-token').value;
+    if (webuiToken) s.napcat.webuiToken = webuiToken;
+    s.napcat.cacheTtlMs = Math.max(0, Math.round(Number($('s-napcat-ttl').value) || 0)) * 60000;
+    s.napcat.timeoutMs = Number($('s-napcat-timeout').value) || 4000;
+    const map = {};
+    for (const line of parseLines($('s-napcat-map').value)) {
+      const m = line.match(/^([^\s=]+)\s*[=:：]\s*(\d{5,12})$/u);
+      if (m) map[m[1].trim()] = m[2];
+    }
+    s.napcat.groupMap = map;
+    s.natural = s.natural || {};
+    s.language = $('s-language').value === 'en' ? 'en' : 'zh-CN';
+    s.natural.aiFirst = $('s-nat-aifirst').checked;
+    s.natural.reviewWeeks = Math.min(10, Math.max(1, Math.round(Number($('s-nat-review').value) || 3)));
+    s.natural.weeklyCommands = Number($('s-nat-weekly').value) || 100;
+    s.natural.notifyUid = $('s-nat-notify').value.trim();
+    const natKeywords = [];
+    for (const line of String($('s-nat-keywords').value || '').split(/\r?\n/u)) {
+      const text = line.trim();
+      if (!text) continue;
+      const m = text.match(/^([^=]+?)\s*=\s*([a-z][a-z0-9-]*)$/u);
+      if (!m) continue;
+      natKeywords.push({ phrase: m[1].trim().slice(0, 20), action: m[2] });
+      if (natKeywords.length >= 15) break;
+    }
+    s.natural.keywords = natKeywords;
+    await savePatch(sectionPatch(['language', 'autoConnect', 'watchJoinRequests', 'panel', 'commands', 'natural', 'ai', 'napcat']));
     if (pendingVerify) toast('已保存；通知对象暂未校验（机器人未连接或无台账记录）', false);
   });
 
@@ -1600,8 +2072,7 @@ function renderSettings(el) {
   }
 
   $('cfg-export').addEventListener('click', async () => {
-    const secrets = $('cfg-secrets').checked ? '1' : '0';
-    const r = await req('/config/export?secrets=' + secrets);
+    const r = await req('/config/export?secrets=0');
     if (!r.ok) return toast(r.error?.message || '导出失败', true);
     download('qqbot-guard-config.json', JSON.stringify(r.data, null, 2));
   });

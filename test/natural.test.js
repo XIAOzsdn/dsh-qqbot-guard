@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../lib/store.js';
 import { Moderation } from '../lib/moderation.js';
 import { detectMentionsBot } from '../lib/bot.js';
-import { parseNaturalIntent, handleNaturalCommand, extractMentionUids, clearLastTarget } from '../lib/natural.js';
+import { parseNaturalIntent, handleNaturalCommand, extractMentionUids, clearLastTarget, findInRoster } from '../lib/natural.js';
 
 function makeStore(settings = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'qqg-natural-'));
@@ -506,5 +506,83 @@ test('免@续聊可以关闭（followUpSec=0）', async () => {
     gid: 'g1', uid: 'u1', name: '管理员', text: '再查一次人数', mentionsBot: false,
   });
   assert.equal(second.handled, false);
+  cleanup();
+});
+
+test('NapCat 花名册：按昵称/群名片精确查人，去重', async () => {
+  const { store, cleanup } = makeStore();
+  store.setDirectory('g1', {
+    at: new Date().toISOString(),
+    qqGroupId: '100001',
+    qqGroupName: '软件交流分享',
+    members: [
+      { qq: '1001', nickname: '阿花', card: '花', role: 'member', joinTime: 0 },
+      { qq: '1002', nickname: '阿花', card: '', role: 'member', joinTime: 0 },
+      { qq: '1003', nickname: '别人', card: '阿花', role: 'admin', joinTime: 0 },
+      { qq: '1003', nickname: '重复', card: '', role: 'admin', joinTime: 0 },
+    ],
+  });
+  const hits = findInRoster(store, 'g1', '阿花');
+  assert.deepEqual(hits.map((x) => x.qq), ['1001', '1002', '1003']);
+  assert.deepEqual(findInRoster(store, 'g1', '查无此人'), []);
+  assert.deepEqual(findInRoster(store, 'g1', ''), []);
+  cleanup();
+});
+
+test('自然语言执行：台账没有但花名册有 → 回复 QQ 与面板操作提示', async () => {
+  const { store, cleanup } = makeStore();
+  store.setDirectory('g1', {
+    at: new Date().toISOString(),
+    members: [{ qq: '12345678', nickname: '测试成员', card: '', role: 'member', joinTime: 1_760_000_000 }],
+  });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const r = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '把“测试成员”踢出群聊',
+    settings: store.settings, store, client,
+  });
+  assert.equal(r.ok, false);
+  assert.ok(sent[0].includes('12345678'), sent[0]);
+  assert.ok(sent[0].includes('面板'), sent[0]);
+  cleanup();
+});
+
+test('自然语言执行：查询花名册成员信息不报“找不到”', async () => {
+  const { store, cleanup } = makeStore();
+  store.setDirectory('g1', {
+    at: new Date().toISOString(),
+    members: [{ qq: '12345678', nickname: '测试成员', card: '刀刀', role: 'admin', joinTime: 1_760_000_000 }],
+  });
+  const sent = [];
+  const client = { sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; } };
+  const r = await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '查询“刀刀”的信息',
+    settings: store.settings, store, client,
+  });
+  assert.equal(r.action, 'info');
+  assert.ok(sent[0].includes('12345678'), sent[0]);
+  assert.ok(sent[0].includes('管理员'), sent[0]);
+  cleanup();
+});
+
+test('人数查询会带上花名册人数', async () => {
+  const { store, cleanup } = makeStore();
+  store.setDirectory('g1', {
+    at: new Date().toISOString(),
+    members: [
+      { qq: '1001', nickname: '甲', role: 'member' },
+      { qq: '1002', nickname: '乙', role: 'member' },
+    ],
+  });
+  const sent = [];
+  const client = {
+    sendGroupText: async (_gid, text) => { sent.push(text); return { ok: true }; },
+    getGroupInfo: async () => ({ ok: true, data: { group_member_num: 8 } }),
+  };
+  await handleNaturalCommand({
+    gid: 'g1', uid: 'u1', name: '管理员', text: '群里有多少人',
+    settings: store.settings, store, client,
+  });
+  assert.ok(sent[0].includes('NapCat 花名册 2 人'), sent[0]);
   cleanup();
 });

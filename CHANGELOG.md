@@ -1,6 +1,527 @@
 # 更新记录
 
+## v2.2.6
+
+> 本版**只修 bug 与安全加固，不新增功能**。29 处改动全部经静态校验 + 端到端实跑验证。
+
+### 修复：发布门槛脚本自身失败（P0）
+
+- **`scripts/doctor.mjs` 引用了已删除的 `lib/qq-api.js`**：v2.1.0 移除官方 Bot 后该文件已不存在，导致 `npm run doctor` **必然 exit 1**。改为加载 6 个真正承载连接的模块（napcat-transport / napcat-client / bot / config / api / webpanel），并新增「全局 WebSocket 可用性」检查（OneBot v11 正向 WS 依赖它）。
+- **`scripts/validate.mjs` 断言已移除的字段**：仍在断言 `Config().appId` / `parsed.appSecret` / `normalizeSettings({appSecret}).appSecret`，而 `lib/config.js` 早已只剩 `settingsNs` + `dataDir`，导致 `npm run validate` **必然 exit 1**（`Config 缺少 appSecret 默认值`）。改为断言 `settingsNs` / `dataDir` / `napcat.wsUrl` 自动补协议，并反向断言设置里**不得**再出现 appId/appSecret。
+
+### 修复：花名册同步完全失效（P1，实跑时发现）
+
+- **`resolveMappings` 还在按「群名匹配」**：v2.1.0 起 `gid` 本身就是 QQ 群号，旧逻辑却要拿群名去猜 QQ 群，猜不到就返回空 `qqGroupId` → 花名册永远同步不了。新增**恒等映射分支**：`gid` 是 5–12 位数字时直接当 QQ 群号用，`direct: true` 标记。
+- **`computeMappings` / `ensureFresh` 只认本地台账**：新装插件没收到任何群事件时台账为空，于是「同步花名册」什么都不做、回执 **0 个群**，用户完全不知道该先让谁发一句话。新增 `targetGroups()`，首次同步从协议端 `get_group_list` 补齐目标群。
+- 实跑结果：修复前 `groups=0 members=0`，修复后 **`groups=2 members=7`**。
+
+### 修复：跨模块字段名不一致（P1）
+
+- `NapCatClient.listJoinRequests()` **不接参数**且只返回 `items`，上层 `syncJoinRequests` 传 `(gid,'',50)` 并读 `r.data.list` → 面板「刷新待审批」永远为空。补签名 `(gid, flag, count)`，返回官方同构 `list`（`join_request_id` / `member_openid` / `username` / `verify_info`）。
+- 群内「同步花名册」读 `r.groups` / `r.members`，实际返回 `syncedGroups` / `syncedMembers` → **永远显示「0 个群、0 位成员」**。
+- `/members` 出口台账字段是 `msgCount`，两套前端读的是 `messageCount` → **群成员「发言次数」永远 0**。改为出口一次性补齐两个字段。
+- `refreshGroupInfo` 读 `group_member_num`（OneBot 返回的是 `member_count`）→ 群成员数写不进注册表；且 `|| undefined` 会把 0 覆盖成 undefined。改为读 `member_count`，且只有正数才写回。
+
+### 修复：面板 favicon 永远 404（P1）
+
+- `serveStatic` 白名单里有 `icon.svg`，但统一从 `webpanel/` 读取，而 `icon.svg` 在**包根目录**（与 `webpanel/` 同级）→ `/icon.svg` 与 `/favicon.ico` 永远 404。改为 `icon.svg` 从 `ROOT/..` 读，其余仍从 `webpanel/` 读；路径穿越防护不变。
+
+### 修复：定时任务可被误删（P2）
+
+- `Scheduler.cancel(id)` 把 key 同时拿去比 `time`（`"22:30"`）和 `at`（时间戳字符串）：
+  - 传**空 id** → `key=''` → 所有 `time=''` 的一次性任务被**一起删掉**；
+  - 传 `"22:30"` → 所有每天 22:30 的任务（**含别的群**）一起删掉。
+  改为只按 `id` 精确匹配；空 id 直接拒绝并提示先查看列表。序号/时间这类模糊输入由调用方先解析成 id。
+
+### 修复：入群审批参数错误（P2）
+
+- `approveJoinRequest` 写死 `sub_type: 'invite'`，但入群申请一律是 `add`，协议端会判参数错误。改为原样回传事件里的 `sub_type`；`BotManager` 收到 `request` 事件时也补记 `subType` / `nickname`。
+
+### 修复：全员禁言回执数字造假（P2）
+
+- NapCat 原生 `set_group_whole_ban` 是**群级开关**，不逐个禁言；旧代码却返回 `done: rows.length`（台账人数）→ 群里回执「成功禁言 N 人」但 N 是台账人数，不是真实禁言数。改为 `groupLevel: true` 语义，回执区分「协议端群级开关」与「逐人禁言」，并同步修正审计明细。
+
+### 修复：`toggle` 缺参数默认「开启」（P2）
+
+- `const on = args.enabled !== false` → 模型没给 `enabled` 时默认**开启**。用户说「关闭闲聊」却可能被静默打开。改为缺参数直接要求说清楚，并加「已是该状态」幂等提示。
+
+### 修复：充值误判与订单号泄露（P2）
+
+- `parseRechargeCommand` 只要句子里有「充」+「N元」就判成充值指令 → 「我要充3块钱话费」会被当成给插件 API 充值。改为：必须有明确动词（或「充+金额」），且出现「话费/流量/电费/水费/燃气/油卡/游戏币/点卡/会员」等外部充值对象时**一律不接管**。
+- `maskOrderId` 对 ≤5 位的订单号**原样返回** → 短单号整号外泄到群里。改为：2 位及以下全掩，3–5 位留首尾各 1 位。
+
+### 安全加固
+
+- **登录限流可被 XFF 绕过**：`clientIp` 无条件信任 `x-forwarded-for` 第一段，直连（无反向代理）时攻击者每次换 XFF 就能绕过失败限流，并污染审计来源 IP。改为默认只用 TCP 对端地址，新增 `panel.trustProxy`（默认 `false`）显式开关，仅反向代理后才应开启。
+- **图片 URL SSRF**：`isPrivateHost` 只查字面 IPv4，漏掉 CGNAT（100.64/10）、组播/保留段、IPv6 回环与链路本地/ULA、IPv4-mapped；且 `downloadImage` 允许重定向 → 公网 URL 可 302 到内网。补全私网判断，并加 `redirect: 'manual'` 直接拒绝 3xx。
+- **宿主侧同源校验**：`isTrusted` 只查 `Origin`，`Host` 缺失时也放行。改为 `Host` 必填 + 无 Origin 时用 `Referer` 兜底。
+- `panel.trustProxy` 已加入 `defaults.js` 与 `config.js` 的归一化（默认 `false`）。
+
+### 其它
+
+- `lib/meta.js` 兜底版本常量 `2.2.3` → `2.2.6`（与 `package.json` 对齐；仅在读盘失败时才会用到）。
+- 新增 `test/contract.test.js`（10 项）：锁定 `listJoinRequests` 签名、`syncJoinRequests` 入列、`sub_type` 回传、`/members` 双字段、`cancel` 精确删除、`resolveMappings` 恒等映射、短号脱敏、充值误判、SSRF 私网判定、探测跳过。
+- `test/recharge.test.js` 同步修正断言（旧断言「≤5 位原样返回」与 README 声明的脱敏规则相反）。
+- 单测 270 → **280** 项。
+
+### 验证
+
+- `node --check` 全量通过；`npm test` **280 项全通过**；`npm run validate` **10/10 PASS exit 0**；`npm run doctor` **exit 0**。
+- 端到端实跑（自建假 OneBot v11 协议端 + 真实调用 `apply(ctx, config)`）：**31 项断言全通过**，含首次部署链路、协议端连接、花名册同步、消息防护、全员禁言、定时任务、审计、模型中转 provider、面板静态资源与路径穿越。
+
+### 文档与文案（本版一并修正）
+
+- **README 规模数字改为实测值**：源码 81 个文件 / 约 1.26 MB（不含 node_modules），发布包约 423 KB 的 zip。
+- **README 依赖说明纠正**：安装依赖只剩 `@deepseek-ai/schemastery`（`@deepseek-ai/cordis` 由宿主提供），删掉早已移除的 `@tencent-connect/qqbot-nodejs`。
+- **README 测试项数**：270 → **281**（含新增的跨模块契约测试）。
+- **README 体检项纠正**：不再写「QQ SDK 能否加载」「`bots.qq.com` / `api.bot.qq.com` 是否可达」，改为「6 个核心模块能否加载」「全局 WebSocket 是否可用」「协议端 WS 端口与 AI 接口 origin 是否可达（未配置时跳过，不再误报网络不可达）」。
+- **README 全员禁言章节重写**：从「纯官方 API 批量禁言」改为「协议端群级开关 `set_group_whole_ban` 优先，不支持时逐人禁言」，并说明回执不再把台账人数当成禁言成功数。
+- **README 入群审批说明纠正**：入群申请来自 OneBot 的 `request` 事件，不再需要 QQ 开放平台 `GROUP_MEMBER_EVENT`；并明确「OneBot 没有主动拉取申请列表的标准动作，刷新只能列出已推送到的申请」。
+- **README 公告兼容性说明纠正**：不再写「QQ 官方机器人接口没有设置群公告的能力」，改为「协议端在线且机器人为管理员时发原生群公告，否则回落普通消息」。
+- **README 术语统一**：`openid` → 「QQ 号」/「群号」（v2.1.0 起标识体系已切换）；「官方台账」→「本地台账」；「官方群按群名自动对应」→「默认恒等映射（v2.2.6 修正）」；@ 的实现说明从官方 markdown 标签改为 OneBot `at` 消息段。
+- **README 定时任务取消说明**：明确「序号会先解析成任务 id，最终只按 id 精确删除」（对应 v2.2.6 的误删修复）。
+- **`COMMANDS.md`**：白名单/提醒对象/目标定位/字段表里的 openid 统一为 QQ 号；全体禁言说明改为群级开关优先；版本号 2.2.5 → 2.2.6。
+- **`locale/zh.json` / `locale/en.json`**：描述里的「不调用任何 AI 模型 / No AI chat」与默认配置（`guest.enabled = true`、`ai.enabled = false`）矛盾，改为「AI 辅助默认关闭，开启后才会调用模型」。
+- **`lib/device.js`**：注释「本插件走 QQ 官方 Bot API，不依赖 NapCat」已过时，改为「插件自身不读取 NapCat 版本，仅在部署环境显式设置 `NAPCAT_VERSION` 时展示」。
+- **`lib/recharge.js`**：充值任务提示词里的「openid」改为「QQ 号」（实际填入的就是 QQ 号，术语与数据一致）。
+- **前端用户可见文案**：面板「成员查询与操作」副标题不再说「官方 API 不提供成员列表」；「全体禁言」副标题改为「优先用协议端群级开关」；成员来源标签「官方台账」→「本地台账」；公告页提示改为「协议端在线且为管理员时可发原生群公告」。
+- **代码注释**：`lib/api.js` / `lib/napcat.js` / `lib/natural.js` 里残留的「官方 API / 官方台账 / 官方接口只认 openid」等描述统一为协议端语义（只改注释与文案，**不改任何逻辑**）。
+- **`test/whole-ban.test.js`**：两条用例名称从「官方批量禁言」改为「逐人禁言兜底」，与 v2.2.6 的实现路径一致（断言未改）。
+
+### 已知未修（需另行决策）
+
+- README / 本文件的历史版本段落里的规模数字已过期（写「48 个文件 / 约 680 KB / 210 KB zip」，实际约 80 个条目 / 411 KB）。
+- `locale/zh.json` 文案「不调用任何 AI 模型」与 `defaults.js`（`guest.enabled = true`）不一致。
+- `lib/device.js` 注释仍称「走 QQ 官方 Bot API，不依赖 NapCat」；`napcatVersion` 读 `process.env.NAPCAT_VERSION` 基本恒空。
+- `Store` 每 5 秒全量序列化 `state.json`，成员上万后单次 flush 可能 >100ms（性能问题，非 bug）。
+- `lib/http.js` 宿主侧路由硬编码 `role: 'admin'`，依赖宿主自身鉴权（设计取舍）。
+## v2.2.5
+
+- **设置页彻底去掉「机器人配置」**：删掉残留的 AppID / AppSecret 凭据卡片（两套界面：DSH 设置页 + 局域网面板），概览页的「QQ 机器人 / AppID」改成真实 QQ 账号，导出的配置也不再回显任何密钥。
+- **设置页直接登录 QQ（不用开 QQ 客户端）**：新增「QQ 账号登录」卡片 —— 读取协议端 WebUI 的登录状态，显示当前账号/昵称/核心在线状态；未登录时一键取二维码（服务端渲染成 SVG，手机 QQ 扫码确认即可），登录过的账号可以「快速登录」；二维码生成后自动轮询，扫码确认后立刻刷新状态。
+- 协议端 WebUI 地址默认 `http://127.0.0.1:6099`，令牌可留空：会按「启动命令」自动读同目录 `napcat/config/webui.json` 的 token；令牌过期（Unauthorized）会自动重新登录一次。
+- 术语清理：面板里剩下的 openid 文案统一改回「QQ 号 / 群号」，避免以为还在用官方 Bot 身份体系。
+- 单测 262 → 270 项（新增 WebUI 登录口令、webui.json 自动发现、登录状态映射、未授权重登、快速登录、二维码 SVG 渲染等）。
+
+## v2.2.4
+
+- **修复「协议端一直报错 + 群被失败回执刷屏」**：二维码投递原来每个 1.5 秒 tick 都 `void` 发起一次，而一次尝试要 4~30 秒，于是几十个尝试叠在一起 —— NapCat 日志满屏 `NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg` 超时，群里同一条 E_QR_SEND_FAILED 连发十几次。现在同一请求同时只允许一次尝试（全局最多 2 个），失败重试上限 3 次，且失败回执只在状态真正翻转时发一次。
+- **链路断开不再算失败**：`NapCat 未连接` / `连接已关闭` / `WebSocket is not open` 这类错误直接跳过、不计次，等重连后再发，避免一次断线把请求判定失败。
+- **二维码优先走本地图片 URI**：先用 `file:///` 把 png 直接当群图片发（不再绕 base64），失败退回 base64，再失败才上传群文件；群文件上传遇「识别URL失败」会自动换成 `file:///` 写法重试一次（部分 NapCat 版本只认带 scheme 的本地 URI）。
+- 单测 259 → 262 项（本地图片 URI、群文件 URI 回退、链路错误判定）。
+
+## v2.2.3
+
+- **修复充值二维码发不出去（E_PAYMENT_TIMEOUT）**：无头 NapCat.Shell 的富媒体通道发不了图片（实测连 1×1 图片都 `NTEvent ... sendMsg` 超时），但 `upload_group_file` 正常。现在图片发送失败会自动**把二维码作为群文件上传**（`pay-qr.png`），并提示“点开群文件扫码支付”。
+- 图片/文件发送的超时从 4 秒放宽到 30 秒；上传群文件时 Windows 反斜杠路径会被 NapCat 当成 URL 而报「识别URL失败」，现统一转成 `/`；发送彻底失败会计数（最多 5 次），已失败/已出码的旧二维码文件不再反复重试。
+- 单测 258 → 259 项（群文件兜底、媒体超时）。
+
+## v2.2.2
+
+- **修复群公告只显示一条**：无头版 NapCat 的 `_get_group_notice` 直接返回数组，旧代码只认 `{data, inst}`，导致结果被当成空、回落到插件本地列表（只有 1 条）。现在两种结构都兼容，并优先走当前连接客户端读取。
+- **群公告展示结构化**：还原 `&#10;` / `&nbsp;` 等 HTML 实体与换行，按「序号 + 标题 + 〔置顶〕〔需确认〕〔发给新成员〕 + 发布时间/已读数 + 图片数 + 正文摘要」展示；标题过长会截断，正文超长省略。
+- **图片说明**：NapCat 只返回公告图片的 file id（无 URL，且 `get_image` 解析不到），因此无法把图片重新发到群里；展示里标明「含 N 张图片」，图片请到群公告查看。
+- 单测 256 → 258 项（公告解码、结构化展示、去重计数）。
+
+## v2.2.1
+
+- 文档补充无头协议端的推荐启动方式：`napcat.startCommand` 直接指向 `C:\napcat\napcat.bat -q <QQ号>`（NapCat.Shell，自带运行时、不启动 QQ 客户端，实测内存约 100–200MB，QQ 进程 0）。
+- 实测：插件自动拉起无头实例 → WS 3001 → 登录 3634084829 → 收发正常；QQ 客户端可完全关闭/卸载。
+- 单测保持 256 项全通过。
+
+## v2.2.0（协议端自动拉起）
+
+- **QQ 没开也能用**：新增 `napcat.autoStart` + `napcat.startCommand`。WS 地址探测不通时，插件自己执行启动命令把协议端拉起来（默认支持计划任务 `schtasks /run /TN "NapCat QQ Bot"`、`NapCat.Shell` 的 `napcat.bat` 等），最多等 ~25 秒再连接，不需要先手动打开 QQ。
+- 新增 `lib/onebot-backend.js`：`wsTarget()` 解析地址、`probeTcp()` 探测协议端、`spawnBackend()` 后台启动（不阻塞、不继承 stdio）。
+- 面板新增「协议端自动启动」「协议端启动命令」两项。
+- 单测 253 → 256 项（地址解析、端口探测、启动命令校验）。
+
+## v2.1.2
+
+- **彻底清理官方机器人账号残留**：插件配置（`Config`）移除 `appId` / `appSecret` 字段；本地 `settings.json` 删除历史 `appId` / `appSecret` / `transport`。官方 QQ 开放平台的机器人账号现在**可以直接注销，不影响插件**。
+- 文档：删除「QQ 开放平台权限」章节，改为「无需 QQ 开放平台（v2.1 起）」说明；所有配置只通过普通 QQ 账号（NapCat）完成。
+- 单测保持 253 项全通过。
+
+## v2.1.1
+
+- 修复 NapCat WS 地址为 `ws://localhost:…` 时可能解析到 IPv6 `::1`、连不上只监听 IPv4 的协议端：连接前统一归一化为 `127.0.0.1`。
+- 单测保持 253 项全通过。
+
+## v2.1.0（移除官方 QQBot，只保留普通 QQ 账号）
+
+- **彻底移除官方 QQBot（AppID / AppSecret）连接**：
+  - 删除 `lib/qq-api.js`（官方 QQClient），@ 标记工具独立为 `lib/mention.js`；
+  - 移除 `@tencent-connect/qqbot-nodejs` 依赖；
+  - 设置里删除 `appId` / `appSecret` / `transport` 字段，面板不再出现 AppID/AppSecret；
+  - 插件启动只检查 NapCat（`napcat.enabled` + `napcat.wsUrl`），连接失败按 NapCat 重连逻辑处理。
+- 所有群操作（收发消息、成员、禁言、踢人、全员禁言、真·群公告）统一走 NapCat / OneBot v11。
+- 单测保持 253 项全通过（更新了设置接口不再返回 appSecret 的断言）。
+
+## v2.0.0（普通 QQ 账号模式）
+
+- **新增 NapCat / OneBot v11 传输层**（`lib/napcat-transport.js`）：以普通 QQ 账号收发群消息，支持全量消息、@ 检测、图片、成员列表、入群通知、入群申请事件；断线自动重连。
+- **新增 NapCatClient**（`lib/napcat-client.js`）：把 OneBot 的 QQ 号/群号语义适配成插件原有接口——发消息（@ 标记转 OneBot at 段）、发图片（base64）、禁言/解禁、踢人、**全员禁言走原生 `set_group_whole_ban`**、撤回、真·群公告（`_send_group_notice` / `_get_group_notice` / `_del_group_notice`）。
+- **连接方式切换**：新增设置 `transport`（`official` 默认 / `napcat`）。`napcat` 模式只需 NapCat 启用且填好 `napcat.wsUrl`，不再需要 AppID/AppSecret；面板改 `transport` 会自动重连。
+- 事件转换：OneBot 群消息 → 内部统一 `mCtx`（openid 位置放 QQ 号/群号），业务逻辑（违规、自然语言、公告、充值、答题）完全复用；入群通知与入群申请事件也接进原有流程。
+- 数据兼容：不删除任何本地文件；NapCat 模式下群/成员标识变为 QQ 号/群号，旧 openid 台账保留但不再对应，新群会重新登记（设置项全局沿用）。
+- 单测 246 → 253 项（@ 段转换、图片 base64、禁言/踢人/全员禁言、真·群公告、token 拼接等）。
+
+## v1.16.9
+
+- **“发公告”默认发真·群公告**：自然语言「发公告 <内容>」在 NapCat 可用时改用 `_send_group_notice`（原生公告栏，支持置顶/需确认），不再是普通群消息；NapCat 不可用或发布失败才回落为机器人消息，并如实回报“真·群公告 / 群消息”。
+- **“查看公告”优先读真公告**：`list-announcements` 先调 `_get_group_notice` 拉取群内原生公告（含置顶标记），只有 NapCat 不可用时才回落到插件保存的公告列表。
+- 前提不变：NapCat 协议端在线、机器人（QQ 账号）是群管理员/群主；官方 Open Platform 机器人接口本身没有公告能力。
+- 单测 245 → 246 项（新增“NapCat 可用时默认 notice 模式”）。
+
+## v1.16.8
+
+- **修复“发公告”只保存不发布**：`sendAnnouncement` 之前没有接到 Host（Moderation/Bot 没注入），自然语言“发公告 …”只写进公告列表、不会发到群里。现在 Bot 注入真实发布实现（`publishAnnouncement`），默认发到**当前群**（显式 targets 优先），并返回“公告已发布到 N 个群”。
+- **AI 意图解析放宽超时**：解析调用不再受 `ai.timeoutMs`（默认 8 秒，仅适合轻量调用）限制，单独放宽到至少 20 秒、输出上限 500 tokens，减少“AI 这次没能理解”的误报；AI 通道仍为主决策。
+- 单测 244 → 245 项（新增“发公告真的发布到当前群”执行器测试）。
+
+## v1.16.7
+
+- **修复“模型请求超时”**：模型中转原先复用了「AI 辅助审核」的 `ai.timeoutMs`（本机为 8 秒，只适合轻量意图解析），导致专用会话每一轮模型请求超过 8 秒就被掐断。现改为独立超时 **300 秒**，与 `ai.timeoutMs` / `ai.maxTokens` 解耦。
+- 中转增加诊断日志（写入 `recharge/bridge.log`）：每次请求记录 `llm 中转请求 model=… messages=… tools=… timeout=…`，完成记录耗时，失败记录原因与超时上限。
+- 单测保持 244 项全通过。
+
+## v1.16.6
+
+- 充值提示词第 1 步补充重连策略：扩展未连接时先重连（重新打开浏览器 / 打开扩展弹窗 / 必要时重启 bsk daemon）**最多 2 次**，两次都失败才写入 `BROWSER_NOT_CONNECTED` 并结束。
+- 单测保持 244 项全通过（新增“最多重试 2 次”断言）。
+
+## v1.16.5
+
+- **充值提示词补充“先确保浏览器可用”步骤**：第 1 步改为——用系统命令打开默认浏览器（打不开依次尝试 Chrome、Edge）→ 检查 BrowserSkill 扩展连接（`bsk status` 的 browsers connected 或扩展弹窗）→ 已连接继续；未连接重新打开浏览器再查一次；仍失败则写入 `BROWSER_NOT_CONNECTED` 并结束，不再执行后续步骤。
+- 单测保持 244 项全通过（新增“默认浏览器 / bsk status”断言）。
+
+## v1.16.4
+
+- 文档补全：README 第 6 章加入**完整的充值提示词示例**（请求信息 / 操作步骤 / 输出方式三段全量保留），并用 `<…>` 占位符标明这些字段由插件按本次请求实时填入、不是固定值。
+- 单测保持 244 项全通过。
+
+## v1.16.3
+
+- 明确说明：充值提示词里的**请求ID、群、用户、金额、支付方式、路径全部由插件按本次请求实时填入**，文档/示例中的数值只是示意，不是固定值；提示词内也新增一行“以下均为本次请求的实际数据（实时填入，不是固定值）”。
+- 单测保持 244 项全通过。
+
+## v1.16.2
+
+- **充值任务提示词精简优化**：改为紧凑模板（请求信息 / 操作步骤 / 输出方式三段），保留插件名与成功回执格式；**金额、支付方式、请求ID、群、用户、请求文件、工作区、二维码/结果输出路径都由插件按当前请求动态填入**，不写死安装路径（不同机器 DSH 位置不同、官方存储位置也可能调整）。
+  - 失败码约定更清晰：`BSK_CLI_MISSING` / `BROWSER_NOT_CONNECTED` / `LOGIN_REQUIRED` / `PAGE_CHANGED` / `PAYMENT_TIMEOUT` / `UNKNOWN`。
+  - 提示词要求“勿向用户转述、不暴露路径与 openid”，并只回一句结果摘要。
+- 单测保持 244 项全通过（提示词动态数据断言）。
+
+## v1.16.1
+
+- **修复“二维码已出、已支付仍被 5 分钟掐断”**：三段超时改清楚，且二维码出现后 5 分钟规则彻底失效：
+  1. **未出二维码**：投递后 5 分钟强制中断（`E_QR_TIMEOUT`）；
+  2. **二维码已发出**：重新计时 **3 分钟**等待支付；
+  3. **3 分钟未到账**：先询问用户「继续 / 放弃」——回复「继续」再延长 **2 分钟**；回复「放弃」立即结束；2 分钟未回复按放弃处理。
+  - 合计上限 **10 分钟**（5 + 3 + 2）。
+  - 询问期间**不中断会话**，用户仍可付款；支付成功立即回执。
+- **一次性补发**：对旧版超时被中断的最近一笔请求补发说明（标注“补发”，说明原因），只发一次。
+- 单测 242 → 244 项（三段计时合计 10 分钟、继续/放弃回复识别）。
+
+## v1.16.0
+
+- **专用会话改用“插件中转模型”**：插件在 DSH 里注册一个自己的 provider 路由（`qqg-deepseek`），把 DSH 的模型请求全部转发到**插件设置里的 AI API**（`baseUrl` / `apiKey` / `model`），不再依赖 DSH 默认模型或修改 DSH 配置文件。
+  - 新增 `lib/llm-bridge.js`：实现 OpenAI 兼容的 `/chat/completions` 流式转发（文本/推理/工具调用、usage、超时与取消），并做 DSH 消息与工具声明到 OpenAI 格式的转换。
+  - `index.js`：加载时 `ctx.llm.registerAdapter(['qqg-deepseek'], bridge)`，卸载时释放；专用会话优先用 `qqg-deepseek/<插件 model>`，路由不可用时才回退 DSH 默认模型。
+  - `bridge.log` 记录 `llm bridge registered: qqg-deepseek (<baseUrl>)` 与 `worker model: qqg-deepseek/<model> (plugin api)`。
+- 单测 237 → 242 项（新增消息/工具转换、适配器元数据、缺少 baseUrl/apiKey 报错）。
+- 注意：插件 API 的 `baseUrl` 需是 OpenAI 兼容网关（DeepSeek 默认 `https://api.deepseek.com`），`model` 用该网关支持的模型名。
+
+## v1.15.10
+
+- **修复专用会话仍不执行的问题**：agent-loop 的 pre-step 在第一步之前就要求模型选择（源码：`agent "..." has no provider/model: set AgentOptions.provider and AgentOptions.model`），否则直接抛错、turn 以 error 结束、消息被丢弃。
+  - 插件注入 `agentDefaultModel`，在 `create({ agentOptions })` 里显式传入默认 provider/model（含 reasoningEffort）；
+  - `bridge.log` 记录 `worker model: <provider>/<model>` 与启动自检 `agentDefaultModel: <provider>/<model>`。
+- 单测保持 237 项全通过。
+
+## v1.15.9
+
+- **专用工作区注册到 DSH 工作区表**：插件加载时通过 `ctx.inject(['workspaceRegistry'])` 调 `workspaceRegistry.create(rechargeWs, '充值工作区')`，让充值会话在 DSH 侧边栏可见；`bridge.log` 记录 `workspace ready: <id>`。
+- 单测保持 237 项全通过。
+
+## v1.15.8
+
+- **修复专用会话建了但完全不执行的问题**：`ctx.agents.create()` 不会自动挂载 agent preset，新建会话因此没有系统提示/工具/模型，turn 打开后一步都跑不了（会话日志只有 header）。
+  - 插件改为注入 `agentPresets`，并在 `create({ setup })` 里调用 `presets.mount(agentCtx)` 挂载**默认预设**；`bridge.log` 记录 `preset mounted: <id>`。
+  - 启动自检同时记录 `agents service` 与 `agentPresets service` 是否可用。
+- 单测保持 237 项全通过（预设挂载属宿主集成，用 bridge.log 现场验证）。
+
+## v1.15.7
+
+- **修复充值会话始终无法创建的根因**：插件没有声明 `inject: ['agents']`，Cordis 拒绝访问 `ctx.agents`（`cannot get property "agents" without inject`），导致所有充值请求都走 `E_AGENT_UNAVAILABLE`。现在已声明注入，启动时自检并写 `bridge.log`（`agents service: ok/unavailable`）。
+- `E_AGENT_UNAVAILABLE` 文案同步为“插件无法访问 DSH 会话服务”，不再误导为“先打开对话”。
+- 审计码去掉重复前缀（`RECHARGE_E_AGENT_UNAVAILABLE` → `RECHARGE_AGENT_UNAVAILABLE`）。
+
+## v1.15.6
+
+- **新增充值进度反馈（有节奏、不刷屏）**：
+  - 插件读取任务会话的事件规模（工具调用次数）+ 已用时长，粗估当前阶段与预计剩余时间，分三档推送到群里：20 秒、60 秒、120 秒，最多 3 条。
+  - 阶段示例：「正在启动处理会话并加载浏览器技能」→「正在打开充值页并选择金额/支付方式」→「正在生成支付二维码」→「正在确认二维码与订单信息」。
+  - 二维码发出后额外提示「请在 2 分钟内扫码支付」。
+- **新增 5 分钟强制中断**：
+  - 投递后 **5 分钟仍未生成二维码** → 强制销毁任务会话并回执 `E_QR_TIMEOUT`（5 分钟未生成支付二维码，已强制结束，附排查建议）。
+  - 二维码发出后 3 分钟仍未支付 → 回执 `E_PAYMENT_TIMEOUT` 并结束会话。
+- 单测 234 → 237 项（进度估算、进度文案、里程碑与超时提示）。
+
+## v1.15.5
+
+- **每个充值任务使用独立会话，任务结束立即销毁，不再复用会话**（避免 AI 带着上一个任务的上下文执行新任务）：
+  - 每次请求都在专用工作区 `recharge-workspace` 里 `ctx.agents.create()` 一个**全新会话**，投递后独立执行；
+  - 结果回执或超时后自动 `dispose()` 该会话（等待其收尾，最多 15 秒），会话不堆积、上下文不串；
+  - 同时最多 3 个任务会话，超出返回 `E_BUSY`「充值处理繁忙，请稍后再试」；
+  - 插件卸载时释放全部任务会话；
+  - 失败码兼容 `E_` 前缀（`E_BUSY` / `E_AGENT_UNAVAILABLE` 等正确映射到提示）。
+- 单测 232 → 234 项（新增：并发已满 E_BUSY、投递成功标记 dispatched）。
+
+## v1.15.4
+
+- **充值改用插件自己的专用工作区与专属会话，不再依赖用户打开的对话**：
+  - 插件加载时创建 `<数据目录>/recharge-workspace` 工作区目录。
+  - 首次充值用 `ctx.agents.create({ sessionId, meta: { cwd: 工作区 } })` 创建**自己的会话**并记入 `state.rechargeSession`；后续请求优先复用该会话（`ctx.agents.get`），失效则 `ctx.agents.resume` 恢复，会话忙（running）时在同一工作区自动新建会话——对应“会话不同/占满时自动新建并继续执行”。
+  - 会话 ID 持久化在 `state.json`，插件卸载时释放自己创建的 agent 句柄。
+  - 不再需要“请先在 DSH 打开对话”；`E_AGENT_UNAVAILABLE` 只在 agents 服务不可用时出现。
+  - 桥接日志（`recharge/bridge.log`）记录 worker 创建/恢复/复用/投递结果。
+  - profile 的 browserskill 配置增加 `lazyTools: false`，让专用会话无需先调 skill 即可直接使用 `bsk_*` 工具。
+- 单测 231 → 232 项（新增专用工作区自动创建用例）。
+
+## v1.15.3
+
+- **充值失败提示按实际情况分类，不再一律复用“请先配置”模板**：
+  - 仅**完全未配置**（插件没有接入充值处理端）时返回配置引导：「充值失败，请先进行配置后再试，具体配置方法请参考帮助文档或联系 GitHub 仓库维护人员咨询」。
+  - 已配置但失败时返回**专业错误码 + 处置建议**，覆盖：`E_AGENT_UNAVAILABLE`（无可用 DSH 会话）、`E_BROWSER_NOT_CONNECTED`（扩展未连接）、`E_BSK_CLI_MISSING`（找不到 bsk）、`E_LOGIN_REQUIRED`（平台未登录）、`E_PAGE_CHANGED`（页面结构变化）、`E_PAYMENT_TIMEOUT`（2 分钟未支付）、`E_HANDLER_TIMEOUT`（处理端 3 分钟无结果）、`E_QR_SEND_FAILED`（二维码发群失败）、`E_UNKNOWN`。
+  - agent 结果文件要求携带 `code`；没有 code 时插件按错误文本自动推断。
+  - 新增处理端超时看门狗（已投递 3 分钟无结果自动回执）与二维码连续失败 5 次回执。
+- 单测 229 → 231 项（新增失败码映射、自由文本推断；更新“已配置但无 agent”用例为专业错误码断言）。
+
+## v1.15.2
+
+- **修复充值唤醒失败的定位与时机问题**：
+  - 之前只在插件加载时扫描一次 agent，宿主重启后如果当时没有打开的会话，之后打开的会话不会被记录 → 唤醒永远失败。现在**每次唤醒时实时读取在线 agent 列表**（`ctx.agents.list()`），并兼容 `ctx.get('agents')`。
+  - 唤醒失败时会把原因写入 `<数据目录>/recharge/bridge.log`（agent 数量、尝试的会话 id、异常信息），便于排查是「没有会话」「扩展没连」还是「投递被拒」。
+  - 审计 `recharge-dispatch` 现在记录投递结果（成功/失败），不再一律 `ok:true`。
+  - 仍未配置处理端时，继续返回友好提示「充值失败，请先进行配置后再试…」。
+- 单测保持 229 项全通过（桥接属宿主集成，用 bridge.log 现场验证）。
+
+## v1.15.1
+
+- **充值未配置时的提示更友好**：当没有配置充值处理端（未安装 BrowserSkill / 没有可唤醒的 agent）时，用户发「充值 50 支付宝」不再收到技术错误，而是统一提示：
+  > 充值失败，请先进行配置后再试，具体配置方法请参考帮助文档或联系 GitHub 仓库维护人员咨询
+  - 该情况不创建挂起请求（或创建后立刻标记失败），不会在 `recharge/` 留下无人处理的文件。
+  - 单测 227 → 229 项（新增：无处理端、有处理端但无可用 agent 两种配置缺失场景）。
+
+## v1.15.0
+
+- **新增：API 余额充值（插件 ⇄ agent 协作，真实支付）**
+  - 受信任成员在群里 @机器人 说「充值 50 支付宝」/「充值 100 元 微信」，插件解析金额与支付方式，受理后回复「正在生成支付二维码」。
+  - 插件把请求写入 `<数据目录>/recharge/req-<id>.json`，并通过 DSH 的 `agent.followup()` 唤醒最近的普通会话（自动跳过子 agent）。
+  - agent 用浏览器（BrowserSkill）打开用户已登录的 DeepSeek 充值页，选择金额与支付方式、点「去支付」，把二维码截图写到 `<数据目录>/recharge/qr-<id>.png`；插件随后通过官方富媒体上传接口把二维码图片发到群里。
+  - 支付成功后 agent 读取账单页的订单号与余额，写入 `res-<id>.json`；插件回执「充值成功：金额（方式），订单号 AB*****HIJ，余额 …」，**订单号中间 5 位用 `*` 脱敏**。
+  - 失败/超时写 `{"ok":false,"error":"…"}`，插件回执失败原因；全程不中断群内对话。
+  - 安全：仅受信任成员可触发（沿用自然语言权限模型）；充值请求落 `state.json`（最多 300 条），二维码文件发送成功后删除。
+- 单测 221 → 227 项（新增 `test/recharge.test.js`：指令解析、订单号脱敏、请求落盘、自然语言/AI 白名单、支付方式映射）。
+- 文档：README 新增「第 6 章 API 余额充值」；配置方式改为**直接给 AI 的安装提示词**（BrowserSkill 路径/命令可能随版本变化，不写死），并补充手动配置备选、排错表与安全说明。
+
+## v1.14.2
+
+- **全体禁言改为纯官方 API 实现，彻底不需要 NapCat / QQ 客户端登录**（新增 `lib/whole-ban.js`）
+  - 官方接口实测边界：`GET /v2/groups/{gid}/restrict_chat_setting` 可读 `global_rule`（`none` / `always` / `schedule`），但 `POST` 只接受 `members`；带 `global_rule` 写入返回成功却状态不变（官方未把"全员禁言开关"开放给机器人）。
+  - 插件实现：**开启** = 用官方成员禁言接口批量禁言全体现有成员（跳过群主 / 管理员 / 机器人，单次最多 200 人）；**解除** = 读取官方禁言状态里的成员列表批量解禁（读不到时退回台账）。效果等价：现有成员都不能说话；QQ 群不出现"全员禁言"横幅、新进群成员不受影响（官方 API 边界）。
+  - 自然语言、面板「立即全员禁言 / 解除」、定时任务三个入口统一走 `lib/whole-ban.js`；`/whole-ban` 接口不再要求 NapCat。
+  - 定时逻辑继续由插件自己的 `lib/scheduler.js` 控制（每 20 秒检查、state.json 持久化、同群同类重复设置=修改），不依赖任何外部调度器 / 协议端。
+  - 官方「获取群成员列表」接口目前是内邀白名单（非白名单返回 11253），因此禁言范围以插件台账为准（成员发言 / 入群事件都会进台账）。
+- 单测 216 → 221 项（新增：只禁言普通成员；按官方禁言状态解禁；读不到状态退回台账；Moderation 集成与自动解除排期）。
+
+## v1.14.1
+
+- **定时任务的「修改」语义对齐 OneBot 惯例**：全员禁言 / 解除全员禁言的定时任务，同群 + 同动作 + 同重复方式再次设置时视为**修改**，先移除旧任务再排新的，不会排出两条。回复会提示「（已替换该群同类旧任务）」。
+  - 触发方式：`22:30 全体禁言` → 再说 `23:00 全体禁言`，排期直接改为 23:00；`每天 23:00 全员禁言` 同理。
+  - 不影响：成员禁言（`mute`）任务、不同动作（禁言 vs 解除）、不同重复方式（一次 vs 每天）、不同群的任务照常各自独立。
+- 单测 214 → 216 项（新增：Scheduler 同群同类覆盖语义；自然语言连续两次设置只保留一条并提示已替换）。
+
+## v1.14.0
+
+- **修复：自然语言「全体禁言 / 解除全体禁言」识别不了**（此前 v1.13.0 已实现执行链路，但 AI 优先模式下失灵）
+  - 根因一：AI 动作白名单 `INTENT_ACTIONS` 漏了 `whole-ban` / `whole-unban`，而 AI 提示词又教模型输出这两个动作 → `parseIntentReply` 一律判为非法 → 回落关键词。
+  - 根因二：默认快捷关键词没有「全体禁言」，说“全体禁言”时被 2 字子串“禁言”抢先命中 → 误当普通禁言；且兜底 gate 要求 `hit.action === local.action`，把本地正确识别的 `whole-ban` 直接丢掉 → 回「未识别的自然语言指令」。
+  - 修复：AI 白名单 + AI 提示词分类补上两个动作；默认关键词新增「全体禁言 / 解除全体禁言」（默认 6 → 8 个）；AI 失败兜底时，本地规则识别出的 `whole-ban / whole-unban` 属强信号（必须出现“全体/全员/全部人”等词才触发），不再被关键词 gate 拦截——说“开启全员禁言 / 22:30 全体禁言”即使 AI 超时也正确执行。
+  - **注意**：执行仍需要 NapCat 协议端在线（`ws://localhost:3001`）才能真正群级禁言；协议端离线时退化为按台账逐人禁言或提示。
+- **新增：真·群公告（NapCat 扩展接口）**
+  - `lib/napcat.js` 新增 `sendGroupNotice`（`_send_group_notice`：正文必填、≤600 字、支持置顶/需确认/图片 URL）、`getGroupNotices`（`_get_group_notice`，兼容新版 `data` 数组与旧版 `inst` 群规数组）、`deleteGroupNotice`（`_del_group_notice`，`notice_id` 必须来自查询结果）；连续调用间自动等 1.5s（QQ 频控）。
+  - `lib/announcements.js` 公告支持 `mode: 'notice'`：启用 NapCat 时优先发布为原生群公告，失败自动回落到机器人消息；调度器（定时公告）同样支持。
+  - `lib/api.js` 新增管理端 `/group-notices` 路由（list / send / delete），写入审计；`/announcements` 的 publish 也已接通。
+  - 面板「公告」页新增「真·群公告管理」卡片：选择群 → 拉取现有公告 → 删除；新建公告可选发布方式（普通消息 / 真·群公告）与置顶。
+  - 说明：官方 Bot API 仍无群公告能力；原生群公告必须机器人为群管理员/群主（否则 NapCat 回 1287，已映射为友好提示）。
+- 单测 210 → 214 项（新增：AI 白名单接受 whole-ban/whole-unban；全员禁言强信号接管“禁言”子串；真公告走 NapCat 与失败回落）。
+
 > 本文件记录 dsh-qqbot-guard 的全部版本变更；功能说明、安装与常见问题见 [README.md](./README.md)。
+
+## v1.13.1
+
+- **版本号改为实时读盘** `package.json`：插件任何对外应答（群聊「插件版本」「设备信息」、API 信封 `meta.version`、面板、`/bootstrap`、配置导出、Cordis 元数据）都每次直接读包根目录 `package.json` 的 `version`，不再使用进程启动时固化进内存的常量。改版本号只需改磁盘文件，插件/宿主无需重启即可生效；读盘失败自动回退内置兜底值。新增 `test/meta.test.js` 锁定该行为。
+- **修复定时任务的跨天缺陷**：`每天 23:00 全体禁言` 这类 daily 任务在当日时刻已过（如晚上 23 点后说次日 23:00）时，之前会被当作「时间必须晚于现在」拒绝；现在正确地排到下一次触发（明天同一时刻）。
+- **移除本地容错层** `lib/fuzzy.js`：错别字 / 谐音 / 拼音完全交给 AI 理解，本地不再维护一份永远写不完的错别字表（AI 提示词里仍保留容错要求）。
+- AI 不可用（未启用 / 超时 / 出错）时，不再勉强猜测错别字：只走保留的快捷关键词，或明确提示换个说法。
+- 单测 207 → 210 项（新增版本号实时读盘 3 项；原「本地容错」用例改为「只由 AI 识别，本地不猜」），文档同步说明「错别字由 AI 识别」。
+
+## v1.13.0
+
+- 新增**全体禁言 / 解除全体禁言**：NapCat 可用时走协议端群级禁言（`set_group_whole_ban`），没有 NapCat 时按台账逐个禁言并在回复中说明。
+- 新增**定时禁言**：`lib/scheduler.js` 每 20 秒检查排期，支持 `22:30` / `明天 9 点` / `3 分钟后` / `每天 23:00`，可定时全员禁言、解除、禁言成员；排期持久化到 `state.json`，重启不丢；面板与自然语言都可增删查。
+- 新增**错别字 / 谐音 / 拼音容错**：`lib/fuzzy.js` 本地容错表（拳体禁盐→全体禁言、踢乐→踢人、解近→解禁、拉嘿→拉黑…）+ AI 提示词增强，识别不清也能落到正确动作。（v1.13.1 已移除本地容错表，改由 AI 识别）
+- 优化**群内闲聊**：回复末尾按概率补 emoji；配置表情包图片后可通过 NapCat 发表情包，失败只记审计不打断文字回复。
+- 新增面板卡片「全体禁言与定时任务」与设置项「表情包图片 / 发送概率 / 兜底 emoji」。
+- 单测 179 → 207。
+
+> 本文件记录 dsh-qqbot-guard 的全部版本变更；功能说明、安装与常见问题见 [README.md](./README.md)。
+
+## v1.12.0
+
+- **新增：AI 总开关（设置 → AI 辅助审核）**
+  - 新增设置项 `ai.master`（默认开启）：关闭后所有 AI 功能一次性停用，包括违规补判、入群审批、入群答题、自然语言指令解析、普通成员闲聊、回复润色、测试模型
+  - 关闭时模型调用被 `AiGuard.available()` 直接拦下，一次请求都不会发出；所有判断回退本地词表与本地规则
+  - 重新打开即恢复原有各项 AI 开关状态，无需逐项重配
+  - DSH 设置页与独立控制台都新增该开关；「当前设置」自然语言摘要也会显示总开关状态
+- 单测 190 → 194 项（新增 `test/ai-master.test.js` 4 项：默认值、AiGuard 拦截、英文指令报错、中文回退本地）
+
+## v1.11.1
+
+- **英文指令改为“只走 AI”，删除本地英文词表**
+  - 移除 `lib/localize.js` 与全部本地英文改写逻辑，英文指令完全交给 AI 解析
+  - AI 未启用 / 超时 / 出错时直接回复“英文指令只通过 AI 解析，请改用中文或先启用 AI”，不再用本地规则猜动作
+  - 中文指令行为不变；精确指标、AI 优先回复沿用 v1.11.0
+- 单测 192 → 190 项（删掉 2 项本地英文词表用例，新增 AI 可用 / AI 不可用 / AI 超时 3 项）
+
+## v1.11.0
+
+- **新增：英文自然语言指令**
+  - 直接输入英文即可，例如 `kick John`、`mute Bob 10 minutes`、`unmute Alice`、`how many members`、`check cpu usage`、`list all members`、`show blacklist`、`add keyword spam`、`disable auto moderation`
+  - 实现方式：新增 `lib/localize.js`，先把英文动作改写成中文规范说法（`kick` → 踢出、`mute` → 禁言、`memory usage` → 内存占用率…），再复用同一套中文本地规则；因此中英混说也不会失效
+  - 中文句子不受影响：只有“基本是 ASCII、且含英文字母”的文本才会被改写
+- **新增：精确指标查询，不再夹带无关信息**
+  - “查看 CPU 占用率”只回一行 CPU 占用率；“查看内存占用率”只回一行内存占用率
+  - 只有“设备信息 / 设备状态 / 看看运行状态”才返回完整设备信息
+  - 斜杠 `/设备 cpu`、`/设备 内存` 也支持同样行为
+- **新增：回复优先由 AI 生成**
+  - 执行结果先交给 `ai.composeReply()` 改写成一句自然的群聊回复，只允许基于给定事实改写，数字与成员名不得改动
+  - AI 超时 / 报错 / 未启用时直接发送本地结果，指令结果不会因模型不可用而丢失
+  - 改写失败有长度与空值校验，避免模型输出撑爆群消息
+- 单测从 183 项增至 191 项（新增 `test/english.test.js` 8 项），`node --test test/*.test.js` 全通过
+
+## v1.10.0
+
+- **修复：「列出入群审批通过关键词」仍然答非所问**
+  - 根因：通用「关键词 / 违规词」分支在入群审批关键词之前命中，把入群审批词表当成了违规词表
+  - 现在按上下文区分：说“列出入群审批通过关键词 / 拒绝关键词”直接列出 `join.approveKeywords` / `join.declineKeywords`（含“入群自动通过”开关状态）；说“查看违规词”才列违规词
+  - 即使 AI 误判成 `list-keywords`，也会在 AI 之后按原文纠正为入群审批关键词动作
+  - 新增自然语言命令：`添加入群通过关键词 X`、`删除入群通过关键词 X`、`添加入群拒绝关键词 X`、`开启 / 关闭入群自动通过`
+- **新增：界面语言系统（首次部署强制选择）**
+  - 新增设置项 `language`（`''` 未选择 / `zh-CN` / `en`），默认 **简体中文**，英文其次
+  - 首次部署必须先选语言：未选择前 QQ 服务不启动、密码设置与主界面都被服务端拦截（返回 `LANGUAGE_REQUIRED`），直接调接口也绕不过
+  - 老用户升级自动视为简体中文（检测到已有配置或已有数据），可在「设置 → 界面语言」随时切换
+  - 通过 AI 安装时，AI 应主动询问语言；30 秒未回复默认简体中文
+  - 语言包就是插件目录 `locale/` 下的 `zh.json` / `en.json`，想改文案直接替换文件即可
+  - DSH 设置页与独立控制台都新增语言选择页 / 「界面语言」卡片
+- 自然语言管理能力补齐：入群审批关键词的查询 / 新增 / 删除，均已纳入「管理功能」清单
+- 单测从 179 项增至 183 项（新增 `test/language.test.js` 3 项与入群审批关键词用例），`node --test test/*.test.js` 全通过
+
+## v1.9.1
+
+- **自然语言用量阈值改为 100 次 / 7 天**（原 30 次），面板提示同步更新
+- **关键词重排周期改为“周”**：默认 3 周，面板可设 1–10 周（原来按天、可到 365 天）
+  - 设置项由 `natural.reviewDays` 改为 `natural.reviewWeeks`；老配置里的天数会自动换算（例如 21 天 = 3 周、70 天 = 10 周）并夹在 1–10 周内
+- **关键词上限明确为 15 条**：配置归一化、面板输入、AI 重排写入三处都会截断到 15 条
+- 单测从 178 项增至 179 项（新增按周配置 / 上限 / 旧天数换算用例），`node --test test/*.test.js` 全通过
+
+## v1.9.0
+
+- **自然语言指令改为「AI 优先」**
+  - 所有自然语言指令（含踢人、禁言、查名单、改设置等）都先交给 AI 决策，关键词不再抢先执行，避免“说得已经很明显却被旧规则截胡”
+  - AI 返回结果仍受动作目录 + `args` 白名单约束，改设置统一走面板校验并写入审计
+  - AI 请求新增 `hint` 字段（本地规则的初步判断，仅作提示，以原文为准）
+- **关键词降级为兜底，并自动重排**
+  - 新增 `lib/natural-keywords.js`：默认 6 个（列出群成员 / 禁言 / 解禁 / 踢人 / 查人数 / 警告），上限 15 个，可在面板「自然语言决策」里编辑
+  - 只有 AI 未启用、超时或失败时才使用关键词；AI 完全关闭时仍走完整本地规则
+  - 新增用量记录 `state.naturalUsage`（最多 400 条）：到重排周期（默认 21 天）或最近 7 天用量达到阈值（默认 30 次）时，按最近常用动作生成新关键词，并 @ 提醒对象（`natural.notifyUid`，留空则第一个信任成员）
+  - 重排会写入审计 `natural-keywords-review`
+- **修复：「列出入群审批通过关键词」答非所问**
+  - 现在先澄清“违规词 / 入群答题 / 白名单”是三种不同的关键词，再提示可用说法，不再直接甩违规词列表
+- **设置页新增「自然语言决策」卡片**（DSH 设置页与独立控制台同步）：AI 优先开关、重排周期、7 天用量阈值、提醒对象、快捷关键词编辑
+- 单测从 168 项增至 178 项（新增 `test/natural-keywords.test.js` 9 项与 AI 优先/兜底用例），`node --test test/*.test.js` 全通过
+
+## v1.8.1
+
+- **修复：`列出所有群成员名单` 同一个人重复出现**
+  - 原因：`mergeMemberRows` 去重时用的键是 `${群gid}|${QQ}`，而 `store.getDirectory(gid)` 返回的对象没有 `gid` 字段，导致“台账里已有 QQ 的人”又会在花名册里再列一次（本机实测 36 行里 7 人重复）
+  - 修复：合并时按 `群 + QQ` / `群 + openid` 双键去重，目录条目缺 `gid` 时退化为按 QQ 去重；面板成员列表一并受益
+- **修复：部分成员显示“QQ 未知”**
+  - 台账里有、花名册里也有的人，如果历史同步时没贴上 QQ（例如当时昵称不唯一），现在会按“群内唯一昵称 / 群名片”在合并时临时补上 QQ 并标记 `qqMatched`（只用于展示，不写回 `state.json`，不会误改历史关联）
+  - 实在无法关联的（例如昵称是空白字符的人），回复里会附上 `openid 尾号`，方便在面板里定位；空白昵称显示为 `未命名(xxxxxx)` 而不是一片空白
+- **新增：成员名单标注身份**
+  - `[群主]` / `[管理员]`：来自协议端花名册的 `role`
+  - `[白名单]`：在「群内指令白名单」`commands.allowUsers` 里
+  - `[信任]`：在「信任成员」`moderation.trustedUsers` 里
+  - `[机器人]`：协议端 `is_robot` 为真，或 QQ 号等于机器人自己的账号（机器人现在也会出现在花名册里，不再被过滤掉）
+  - 面板与 DSH 设置页的成员表格同步显示这些标记
+- 单测从 164 项增至 168 项（新增去重、临时补 QQ、身份标注、机器人识别用例），`node --test test/*.test.js` 全通过
+
+## v1.8.0
+
+- **自然语言指令扩展到“能设置的都能说”**
+  - 新增 `lib/natural-admin.js`：本地关键词规则 + 统一执行器，覆盖查询与修改两大类动作
+  - 查询：`列出所有群成员名单`（有 NapCat 目录时带 QQ 号、标出未发言成员）、`查看黑名单` / `查看白名单` / `看看信任成员` / `查看违规词`、`当前设置是什么`、`有哪些待审批`、`看看公告列表`、`同步一下花名册`
+  - 修改：增删违规词、增删黑名单、增删指令白名单、设置/取消信任成员、设置默认禁言时长、设置违规处置方式（警告/禁言/移出/删除消息）、改入群欢迎语、改群规、改指令前缀、开关功能（自动审核 / 入群 / 群内指令 / 自然语言 / 闲聊 / 公告 / AI / NapCat 成员目录）、发公告与删除公告
+  - 仍然保持两层判定：**关键词规则先匹配，命中就不调用模型**；没匹配到的说法才交给 AI 解析
+  - AI 意图协议同步扩展：动作目录来自 `ADMIN_ACTIONS`，返回 `args` 只接受 `word / feature / enabled / text / action / index` 六个白名单字段，其他字段一律丢弃
+  - 改设置统一走 `saveSettings()`，与面板保存共用校验、审计与必要的重启逻辑；群里回复明确告知结果
+  - 说「管理功能」可随时查看完整清单
+- **修复：群内自然语言查不到“只存在于花名册”的成员**
+  - `lib/bot.js` 构造 `Moderation` 时漏传 `getDirectory`，导致之前实现的“台账没有就去 NapCat 花名册查”实际上从未生效；现在 `BotManager` 会把成员目录与 `saveSettings` 一起传给 `Moderation`
+- 单测从 153 项增至 164 项（新增 `test/natural-admin.test.js`：查询/修改关键词解析、不抢成员处置指令、执行器持久化、黑名单按昵称找回、花名册列表带 QQ、AI `args` 白名单校验），`node --test test/*.test.js` 全通过
+
+## v1.7.2
+
+- **NapCat 成员目录改成开箱即用（新用户友好）**
+  - 默认开启：`napcat.enabled = true`、地址默认 `ws://127.0.0.1:3001`、`autoSync` 与 `no_cache` 默认开
+  - 新增「自动探测」：扫描 `~/napcat/napcat/config`、`C:\napcat\napcat\config`、`~/NapCat/config`、`~/LLOneBot/data/config`、`%APPDATA%/NapCatQQ/config` 等目录里的 `onebot11*.json`，读出 `websocketServers[].port` / `token`，再逐个试连；找到就自动回填并写回设置
+  - 新增开关 `napcat.autoDetect`（默认开）：启动时如果当前地址连不上，自动探测一次并回填，不再让新用户卡在“未连接”
+  - 新增接口 `POST /api/qqbot-guard/napcat/discover`；两个前端都加了「自动探测」按钮与参数模板提示
+- **文档**
+  - README「5. 安装」新增「NapCat 成员目录」小节：参数模板表（NapCat 3001 / LLOneBot 3000 / OneBot 6700）、token 去哪找、群映射模板、五步操作
+  - AI 安装提示词新增第 8 步：要求 AI 主动检查并配置 NapCat 成员目录；「安装完成后手动完成」从两件事改为三件事
+  - 安装后的配置步骤、功能清单同步说明“默认开启 + 自动探测”
+- 单测从 149 项增至 153 项（新增 WebSocket 配置解析、配置目录扫描、默认值开箱即用等用例），`node --test test/*.test.js` 全通过
+
+## v1.7.1
+
+- **修复：打开「DSH 设置 → QQ 群管家」会卡 9 秒左右**
+  - 现象：`/api/qqbot-guard/bootstrap` 与 `/compat` 每个请求都要等约 9.3 秒（其他接口都是毫秒级），页面看起来像连不上
+  - 原因：`lib/compat.js` 里用 `process.report.getReport()` 读 glibc 版本，这个调用在 Windows / Electron 宿主上会阻塞数秒；而 glibc 只对 Linux 有意义
+  - 修复：非 Linux 平台直接跳过该系统调用，`bootstrap` / `compat` 恢复到毫秒级
+- **修复：子路径页面下「无法连接插件接口：Unexpected token 'o', "not found" is not valid JSON"**
+  - 客户端原来只用页面相对路径拼接口地址，页面挂在子路径时会被静态兜底返回纯文本 `not found`
+  - 现在相对路径失败会自动回退到站点根路径 `/api/qqbot-guard/`，并在报错里带上实际 URL、HTTP 状态与响应片段
+- **修复：插件重启后成员页把 NapCat 显示成「未连接 / 从未同步」**
+  - 协议端实时群列表只存在于内存，进程重启后为空；现在状态与「按群名自动匹配」都会回落到 `state.json` 里已持久化的目录，重启后照样看得到上次同步时间、群列表与目录匹配
+- 单测仍为 149 项，`node --test test/*.test.js` 全通过
+
+## v1.7.0
+
+- **新增「NapCat 成员目录」（可选）**：解决 QQ 官方 Bot API 只能看到发过言的成员、且没有 QQ 号的问题
+  - 通过本机 NapCat / LLOneBot 等 OneBot 协议端的 WebSocket 调用 `get_group_list` + `get_group_member_list`，默认 `no_cache: true` 绕过协议端缓存、直接向服务器拉取最新花名册
+  - 官方群按群名自动对应 QQ 群（唯一匹配才自动，同名歧义时留空）；可在「设置 → NapCat 成员目录」用「官方群 openid = QQ 群号」手动映射
+  - 成员列表合并官方台账与协议端花名册：新增 QQ 号、来源标记（官方台账 / NapCat 花名册 / 官方+NapCat）、管理员身份，支持按 QQ 号搜索
+  - 新增「同步花名册」按钮与 `/members/sync`、`/napcat/test` 接口；打开成员页按缓存时长自动同步，失败有退避，不阻塞原功能
+  - 管理动作按能力分流：有 openid 的仍走 QQ 官方接口；只有 QQ 号的通过 OneBot `set_group_ban` / `set_group_kick` 执行，并写入审计
+  - 昵称唯一时才把 QQ 号贴回历史台账，同名不猜、不覆盖已有关联
+  - 许可证/配置：`settings.napcat`（enabled / wsUrl / token / autoSync / noCache / cacheTtlMs / timeoutMs / groupMap），导出配置默认不含 Token
+- 成员台账新增 `directory` 缓存、`patchMember` 与目录查询方法；快照新增 `directoryCount`
+- 群内自然语言指令也能查花名册：受信任成员问「查询‘某某’的信息」，或对没发过言的人下指令时，回复里会带上花名册中的 QQ 号、群角色与入群时间，并提示去面板按 QQ 号操作；人数查询会同时报出花名册人数
+- 单测从 134 项增加到 149 项（新增 `test/napcat.test.js`，以及花名册查询相关用例）
 
 ## v1.6.0
 

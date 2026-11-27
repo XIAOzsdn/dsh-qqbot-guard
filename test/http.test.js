@@ -71,7 +71,7 @@ test('bootstrap 返回合法信封', async () => {
   assert.equal(r.json.ok, true);
   assertEnvelope(r.json);
   assert.equal(r.json.data.groups[0].gid, 'g1');
-  assert.equal(r.json.data.settings.appSecret, '');
+  assert.equal(r.json.data.settings.appSecret, undefined);
   cleanup();
 });
 
@@ -102,7 +102,7 @@ test('保存设置会归一化并热更新', async () => {
   assert.equal(r.json.ok, true);
   assert.equal(store.settings.moderation.action, 'mute');
   assert.equal(store.settings.moderation.muteSeconds, 120);
-  assert.equal(r.json.data.appSecret, '');
+  assert.equal(r.json.data.appSecret, undefined);
   cleanup();
 });
 

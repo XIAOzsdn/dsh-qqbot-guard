@@ -80,22 +80,24 @@ await check('cordis.patch.yml 基本结构', () => {
 await check('配置 Schema 与归一化', async () => {
   const { Config, normalizeSettings } = await import(pathToFileURL(join(root, 'lib', 'config.js')).href);
   if (!Config || typeof Config !== 'function') throw new Error('Config 不是 schemastery Schema');
-  const parsed = Config({ appId: '123', dataDir: '' });
-  if (parsed.appId !== '123') throw new Error('Config 未保留 appId');
-  if (typeof parsed.appSecret !== 'string') throw new Error('Config 缺少 appSecret 默认值');
+  // v2.1.0 起官方 QQBot 凭据（AppID / AppSecret）已彻底移除，宿主配置只剩命名空间与数据目录
+  const parsed = Config({ settingsNs: 'qqg-test', dataDir: '/tmp/qqg' });
+  if (parsed.settingsNs !== 'qqg-test') throw new Error('Config 未保留 settingsNs');
+  if (parsed.dataDir !== '/tmp/qqg') throw new Error('Config 未保留 dataDir');
+  if (typeof Config({}).settingsNs !== 'string') throw new Error('Config 缺少 settingsNs 默认值');
   const json = Config.toJSON();
   const top = json.refs && json.refs[json.uid];
   if (!top || top.type !== 'object') throw new Error('Config 必须是 object schema');
-  if (normalizeSettings({ appSecret: 's' }).value.appSecret !== 's') throw new Error('secret 未保留');
   const r = normalizeSettings({
-    appId: '123',
     moderation: { action: 'kick', muteSeconds: 999999999, keywords: ['a', 'a', 3] },
     join: { welcome: { variants: ['x'] } },
+    napcat: { wsUrl: '127.0.0.1:3001' },
   });
-  if (r.value.appId !== '123') throw new Error('appId 未保留');
   if (r.value.moderation.action !== 'kick') throw new Error('action 未保留');
   if (r.value.moderation.muteSeconds > 30 * 24 * 3600) throw new Error('muteSeconds 未限幅');
   if (r.value.moderation.keywords.length !== 1) throw new Error('keywords 未去重/过滤');
+  if (r.value.napcat.wsUrl !== 'ws://127.0.0.1:3001') throw new Error('napcat.wsUrl 未自动补协议');
+  if ('appId' in r.value || 'appSecret' in r.value) throw new Error('已移除的官方凭据字段仍在设置里');
   return '通过';
 });
 
